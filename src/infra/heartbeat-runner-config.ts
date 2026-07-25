@@ -153,7 +153,13 @@ function resolveHeartbeatConfig(
 
 export function resolveAmbientHeartbeatAgentId(cfg: OpenClawConfig): string {
   const configured = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
-  return normalizeAgentId(configured ?? resolveDefaultAgentId(cfg));
+  return normalizeAgentId(
+    configured ??
+      resolveDefaultAgentId(cfg, {
+        surface: "ambient heartbeat scheduling",
+        hint: "Set agents.defaults.heartbeat.agentId to the agent that owns ambient heartbeats.",
+      }),
+  );
 }
 
 function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {

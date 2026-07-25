@@ -16,6 +16,7 @@ import {
   listAgentEntries,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -624,9 +625,16 @@ export function resolveMemoryDreamingWorkspaces(
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  if (primaryWorkspaceDir) {
+    const primaryAgentId =
+      options.primaryAgentId ??
+      tryResolveSoleAgentId(cfg) ??
+      resolveDefaultAgentId(cfg, {
+        surface: "primary memory-dreaming workspace ownership",
+        hint: "Pass primaryAgentId with primaryWorkspaceDir on a multi-agent fleet.",
+      });
+    addWorkspace(primaryWorkspaceDir, primaryAgentId);
+  }
   return [...byWorkspace.values()];
 }

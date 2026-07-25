@@ -241,6 +241,9 @@ async function resolveRealtimeProvider(params: {
 
 function listRealtimeAgentIds(config: VoiceCallConfig, coreConfig: OpenClawConfig): string[] {
   const agentIds = new Set<string>([normalizeAgentId(config.agentId)]);
+  for (const agentId of Object.keys(coreConfig.agents?.entries ?? {})) {
+    agentIds.add(normalizeAgentId(agentId));
+  }
   for (const agent of coreConfig.agents?.list ?? []) {
     agentIds.add(normalizeAgentId(agent.id));
   }
@@ -320,14 +323,16 @@ export async function createVoiceCallRuntime(params: {
 
   const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
   const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const configuredAgentId = unresolvedConfig.agentId
-    ? normalizeAgentId(unresolvedConfig.agentId)
-    : resolveDefaultAgentId(cfg);
-  const config = { ...unresolvedConfig, agentId: configuredAgentId };
-
-  if (!config.enabled) {
+  if (!unresolvedConfig.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
   }
+  const configuredAgentId = unresolvedConfig.agentId
+    ? normalizeAgentId(unresolvedConfig.agentId)
+    : resolveDefaultAgentId(cfg, {
+        surface: "voice-call relay ownership",
+        hint: "Set the voice-call plugin agentId target.",
+      });
+  const config = { ...unresolvedConfig, agentId: configuredAgentId };
 
   if (config.skipSignatureVerification) {
     log.warn(

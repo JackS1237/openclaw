@@ -18,7 +18,7 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: { default: true } });
+      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });
@@ -28,7 +28,7 @@ describe("persisted implicit-main roster migration", () => {
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
       expect(snapshot.exists).toBe(false);
-      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: { default: true } });
+      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
     });
   });
 
@@ -47,7 +47,7 @@ describe("persisted implicit-main roster migration", () => {
       resetConfigRuntimeState();
       const channelsSnapshot = await readConfigFileSnapshot();
       expect(channelsSnapshot.sourceConfigBeforeMigrations?.agents?.entries).toBeUndefined();
-      expect(channelsSnapshot.sourceConfig.agents?.entries).toEqual({ main: { default: true } });
+      expect(channelsSnapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
 
       await fs.writeFile(
         includePath,
@@ -58,9 +58,7 @@ describe("persisted implicit-main roster migration", () => {
       expect(rosterSnapshot.sourceConfigBeforeMigrations?.agents?.list).toEqual([
         { id: "ops", default: true },
       ]);
-      expect(rosterSnapshot.sourceConfig.agents?.entries).toEqual({
-        ops: { default: true },
-      });
+      expect(rosterSnapshot.sourceConfig.agents?.entries).toEqual({ ops: {} });
     });
   });
 
@@ -238,7 +236,7 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
-  it("converts a legacy list roster before applying default normalization", () => {
+  it("converts a legacy list, materializes its retired default, and strips the marker", () => {
     expect(
       migratePersistedImplicitMainRoster({
         agents: {
@@ -252,15 +250,45 @@ describe("persisted implicit-main roster migration", () => {
     ).toEqual({
       config: {
         agents: {
-          defaults: { workspace: "/srv/ops" },
           entries: {
             ops: { workspace: "/srv/ops" },
-            writer: { default: true },
+            writer: { workspace: "/srv/ops" },
+          },
+          defaults: {
+            workspace: "/srv/ops",
+            heartbeat: { agentId: "writer" },
+            systemAgent: { agentId: "writer" },
           },
         },
+        talk: { agentId: "writer" },
       },
       changed: true,
-      diagnostics: ["Moved agents.list to keyed agents.entries."],
+      diagnostics: [
+        "Moved agents.list to keyed agents.entries.",
+        'Pinned the retired default agent "writer" to its current workspace.',
+        'Assigned ambient heartbeat runs to agent "writer".',
+        'Assigned ambient system-agent consults to agent "writer".',
+        'Assigned ambient Talk sessions to agent "writer".',
+        "Removed retired agents.entries.*.default markers.",
+      ],
+    });
+  });
+
+  it("preserves the first legacy list owner when no marker was authored", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: { list: [{ id: "10" }, { id: "2" }] },
+      channels: { telegram: { enabled: true } },
+    });
+    expect(migrated.config).toMatchObject({
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "10" },
+          systemAgent: { agentId: "10" },
+        },
+        entries: { "2": {}, "10": {} },
+      },
+      bindings: [{ agentId: "10", match: { channel: "telegram", accountId: "*" } }],
+      talk: { agentId: "10" },
     });
   });
 
@@ -279,14 +307,7 @@ describe("persisted implicit-main roster migration", () => {
   ])("preserves original list order for numeric ids with $label", ({ list }) => {
     const migrated = migratePersistedImplicitMainRoster({ agents: { list } });
     expect(migrated.changed).toBe(true);
-    expect(migrated.config).toMatchObject({
-      agents: {
-        entries: {
-          "2": {},
-          "10": { default: true },
-        },
-      },
-    });
+    expect(migrated.config).toMatchObject({ agents: { entries: { "2": {}, "10": {} } } });
   });
 
   it("preserves a __proto__ agent as an own keyed entry", () => {
@@ -298,9 +319,7 @@ describe("persisted implicit-main roster migration", () => {
     };
 
     expect(Object.hasOwn(config.agents.entries, "__proto__")).toBe(true);
-    expect(Object.getOwnPropertyDescriptor(config.agents.entries, "__proto__")?.value).toEqual({
-      default: true,
-    });
+    expect(Object.getOwnPropertyDescriptor(config.agents.entries, "__proto__")?.value).toEqual({});
   });
 
   it("preserves an own __proto__ entry field for strict schema rejection", () => {
@@ -323,7 +342,7 @@ describe("persisted implicit-main roster migration", () => {
       tools: { allow: ["*"] },
     });
     expect(entry.tools).toBeUndefined();
-    expect(entry.default).toBe(true);
+    expect(entry.default).toBeUndefined();
     const validation = validateConfigObjectRaw(migrated.config);
     expect(validation.ok).toBe(false);
     if (!validation.ok) {
@@ -366,7 +385,7 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: { default: true } });
+      expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
         agents: { entries: {} },
       });
@@ -375,21 +394,24 @@ describe("persisted implicit-main roster migration", () => {
 
   it.each([
     {
-      label: "missing default",
+      label: "marker absent",
       entries: { ops: {}, research: {} },
-      expected: { ops: { default: true }, research: {} },
+      expected: { ops: {}, research: {} },
+      expectedOwner: undefined,
     },
     {
       label: "duplicate defaults",
       entries: { ops: {}, research: { default: true }, writer: { default: true } },
-      expected: { ops: {}, research: { default: true }, writer: {} },
+      expected: { ops: {}, research: {}, writer: {} },
+      expectedOwner: "research",
     },
     {
       label: "false default markers",
       entries: { ops: { default: false }, research: { default: false } },
-      expected: { ops: { default: true }, research: {} },
+      expected: { ops: {}, research: {} },
+      expectedOwner: "ops",
     },
-  ])("normalizes $label markers in memory", async ({ entries, expected }) => {
+  ])("strips $label markers in memory", async ({ entries, expected, expectedOwner }) => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -399,20 +421,44 @@ describe("persisted implicit-main roster migration", () => {
       const snapshot = await readConfigFileSnapshot();
 
       expect(snapshot.valid).toBe(true);
-      expect(snapshot.sourceConfig.agents?.entries).toEqual(expected);
+      expect(snapshot.sourceConfig.agents?.entries).toMatchObject(expected);
+      if (expectedOwner) {
+        expect(snapshot.sourceConfig.agents?.entries?.[expectedOwner]?.workspace).toEqual(
+          expect.any(String),
+        );
+      }
+      expect(snapshot.sourceConfig.agents?.defaults?.heartbeat?.agentId).toBe(expectedOwner);
+      expect(snapshot.sourceConfig.agents?.defaults?.systemAgent?.agentId).toBe(expectedOwner);
+      expect(snapshot.sourceConfig.talk?.agentId).toBe(expectedOwner);
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
         agents: { entries },
       });
     });
   });
 
-  it("marks the first object entry and leaves wholly malformed maps unchanged", () => {
+  it("materializes a sole legacy marker before preserving malformed siblings", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: { entries: { ops: { default: true }, broken: null } },
+    });
+    expect(migrated.config).toMatchObject({
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "ops" },
+        },
+        entries: { ops: {}, broken: null },
+      },
+      talk: { agentId: "ops" },
+    });
+  });
+
+  it("keeps marker-free entries and leaves wholly malformed maps unchanged", () => {
     expect(
       migratePersistedImplicitMainRoster({ agents: { entries: { invalid: null, ops: {} } } }),
     ).toEqual({
-      config: { agents: { entries: { invalid: null, ops: { default: true } } } },
-      changed: true,
-      diagnostics: ['Migrated agents.entries by marking "ops" as default.'],
+      config: { agents: { entries: { invalid: null, ops: {} } } },
+      changed: false,
+      diagnostics: [],
     });
     const malformed = { agents: { entries: { first: null, second: "invalid" } } };
     expect(migratePersistedImplicitMainRoster(malformed)).toEqual({
@@ -442,7 +488,7 @@ describe("persisted implicit-main roster migration", () => {
 
       expect(snapshot.valid).toBe(false);
       expect(snapshot.issues).toContainEqual(
-        expect.objectContaining({ path: "agents.entries.ops.default" }),
+        expect.objectContaining({ path: "agents.entries.ops" }),
       );
     });
   });

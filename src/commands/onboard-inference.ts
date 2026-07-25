@@ -3,7 +3,7 @@ import { randomInt } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentConfig, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
@@ -185,10 +185,11 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const defaultAgentId = options.config ? resolveDefaultAgentId(options.config) : undefined;
-  const defaultAgentModel = options.config
-    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
-    : undefined;
+  const defaultAgentId = options.config ? tryResolveSoleAgentId(options.config) : undefined;
+  const defaultAgentModel =
+    options.config && defaultAgentId
+      ? resolveAgentConfig(options.config, defaultAgentId)?.model
+      : undefined;
   const existingModel =
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);

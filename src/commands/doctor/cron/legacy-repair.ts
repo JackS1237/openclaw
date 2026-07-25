@@ -13,6 +13,7 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
@@ -64,6 +65,55 @@ export type LegacyCronRepairResult = {
   warnings: string[];
   codexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
+
+/** Persists the retired config default onto legacy cron rows that have no scoped owner. */
+export async function materializeLegacyDefaultCronJobOwners(params: {
+  cfg: OpenClawConfig;
+  legacyDefaultAgentId: string;
+}): Promise<LegacyCronRepairResult> {
+  let state: LegacyCronRepairState | null;
+  try {
+    state = await loadLegacyCronRepairState({ cfg: params.cfg });
+  } catch (err) {
+    return { changes: [], warnings: [`Failed reading cron storage: ${errorMessage(err)}`] };
+  }
+  if (!state || state.rawJobs.length === 0) {
+    return { changes: [], warnings: [] };
+  }
+  const agentId = normalizeAgentId(params.legacyDefaultAgentId);
+  let rewritten = 0;
+  for (const job of state.rawJobs) {
+    const explicitAgentId = normalizeOptionalString(job.agentId);
+    const scopedAgentId = parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
+    if (explicitAgentId || scopedAgentId) {
+      continue;
+    }
+    job.agentId = agentId;
+    rewritten += 1;
+  }
+  if (rewritten === 0) {
+    return { changes: [], warnings: [] };
+  }
+  try {
+    await saveCronJobsStore(state.storePath, {
+      version: 1,
+      jobs: state.rawJobs as unknown as CronJob[],
+    });
+  } catch (err) {
+    return {
+      changes: [],
+      warnings: [
+        `Failed writing cron owners at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`,
+      ],
+    };
+  }
+  return {
+    changes: [
+      `Assigned ${pluralize(rewritten, "legacy cron job")} to agent "${agentId}" before retiring the stored default.`,
+    ],
+    warnings: [],
+  };
+}
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;

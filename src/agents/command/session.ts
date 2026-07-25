@@ -33,6 +33,7 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
@@ -229,7 +230,6 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
   const requestedSessionKey = opts.sessionKey?.trim() || undefined;
@@ -246,6 +246,15 @@ export function resolveSessionKeyForRequest(opts: {
           agentId: requestedAgentId,
         })
       : undefined);
+  const scopedSessionAgentId = parseAgentSessionKey(explicitSessionKey)?.agentId;
+  const defaultAgentId = normalizeAgentId(
+    requestedAgentId ??
+      scopedSessionAgentId ??
+      resolveDefaultAgentId(opts.cfg, {
+        surface: "agent command session routing",
+        hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+      }),
+  );
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
@@ -331,9 +340,13 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
-  const sessionAgentId = opts.agentId?.trim()
-    ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
+  const sessionAgentId =
+    (opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined) ??
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    resolveDefaultAgentId(opts.cfg, {
+      surface: "agent command session ownership",
+      hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+    });
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({

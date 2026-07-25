@@ -4,7 +4,7 @@ import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
 } from "../../process/gateway-work-admission.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -183,9 +183,6 @@ async function onAdmittedTimer(state: CronServiceState) {
   const sessionReaperDefaultAgentId = hasSessionReaperStore
     ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
     : undefined;
-  if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
-    throw new Error("Cron session reaper requires the prepared configured default agent id.");
-  }
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
@@ -593,31 +590,41 @@ async function onAdmittedTimer(state: CronServiceState) {
     const addStoreTarget = (agentId: string, storePath: string) => {
       storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
     };
-    const resolveJobAgentId = (job: CronJob, defaultAgentId: string) =>
-      typeof job.agentId === "string" && job.agentId.trim()
-        ? normalizeAgentId(job.agentId)
-        : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+    const resolveJobAgentId = (job: CronJob, defaultAgentId?: string) => {
+      const owner = job.agentId?.trim() || parseAgentSessionKey(job.sessionKey)?.agentId;
+      return owner ? normalizeAgentId(owner) : defaultAgentId;
+    };
     const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
     if (state.deps.resolveSessionStorePath) {
-      const defaultAgentId = sessionReaperDefaultAgentId!;
       for (const agentId of configuredAgentIds) {
         const normalizedAgentId = normalizeAgentId(agentId);
         addStoreTarget(normalizedAgentId, state.deps.resolveSessionStorePath(normalizedAgentId));
       }
       for (const job of state.store?.jobs ?? []) {
-        const agentId = resolveJobAgentId(job, defaultAgentId);
-        addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
+        const agentId = resolveJobAgentId(job, sessionReaperDefaultAgentId);
+        if (agentId) {
+          addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
+        }
       }
-      addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
+      if (sessionReaperDefaultAgentId) {
+        addStoreTarget(
+          sessionReaperDefaultAgentId,
+          state.deps.resolveSessionStorePath(sessionReaperDefaultAgentId),
+        );
+      }
     } else if (state.deps.sessionStorePath) {
-      const defaultAgentId = sessionReaperDefaultAgentId!;
       for (const agentId of configuredAgentIds) {
         addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
       }
       for (const job of state.store?.jobs ?? []) {
-        addStoreTarget(resolveJobAgentId(job, defaultAgentId), state.deps.sessionStorePath);
+        const agentId = resolveJobAgentId(job, sessionReaperDefaultAgentId);
+        if (agentId) {
+          addStoreTarget(agentId, state.deps.sessionStorePath);
+        }
       }
-      addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+      if (sessionReaperDefaultAgentId) {
+        addStoreTarget(sessionReaperDefaultAgentId, state.deps.sessionStorePath);
+      }
     }
 
     if (storeTargets.size > 0) {
@@ -626,7 +633,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         try {
           await sweepCronRunSessions({
             agentId,
-            defaultAgentId: sessionReaperDefaultAgentId!,
+            defaultAgentId: sessionReaperDefaultAgentId ?? agentId,
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
             nowMs,

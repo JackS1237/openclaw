@@ -14,10 +14,7 @@ function isInjectedMainRoster(config: OpenClawConfig): boolean {
   const roster = listAgentEntries(config);
   const entry = roster[0];
   return (
-    roster.length === 1 &&
-    entry?.id === "main" &&
-    entry?.default === true &&
-    Object.keys(entry).every((key) => key === "id" || key === "default")
+    roster.length === 1 && entry?.id === "main" && Object.keys(entry).every((key) => key === "id")
   );
 }
 
@@ -89,9 +86,9 @@ export async function ensureOnboardingAgent(params: {
     entry: {
       id: "main",
       name: "main",
-      default: true,
       workspace: params.workspace,
     },
+    bootstrapMain: true,
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });

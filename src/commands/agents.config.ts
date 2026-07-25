@@ -8,7 +8,7 @@ import {
   listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
@@ -69,12 +69,14 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
 
 /** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
     configuredAgents.length > 0
       ? configuredAgents.map((agent) => normalizeAgentId(agent.id))
-      : [defaultAgentId];
+      : defaultAgentId
+        ? [defaultAgentId]
+        : [];
   const bindingCounts = new Map<string, number>();
   for (const binding of listRouteBindings(cfg)) {
     const agentId = normalizeAgentId(binding.agentId);
@@ -113,7 +115,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       agentDir: resolveAgentDir(cfg, id),
       model: resolveAgentModel(cfg, id),
       bindings: bindingCounts.get(id) ?? 0,
-      isDefault: id === defaultAgentId,
+      isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
     };
     if (identityAvatarUrl) {
       summary.identityAvatarUrl = identityAvatarUrl;
@@ -122,7 +124,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
-/** Add or update one agent entry. The first roster entry becomes the explicit default. */
+/** Add or update one canonical agent entry. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -138,10 +140,7 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = (index >= 0 ? list[index] : undefined) ?? {
-    id: agentId,
-    ...(list.length === 0 ? { default: true } : {}),
-  };
+  const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
@@ -160,6 +159,13 @@ export function applyAgentConfig(
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
+    if (nextList.length === 1 && !nextList[0]?.workspace?.trim()) {
+      const soleAgent = nextList[0]!;
+      nextList[0] = {
+        ...soleAgent,
+        workspace: resolveAgentWorkspaceDir(cfg, soleAgent.id),
+      };
+    }
     nextList.push(nextEntry);
   }
   const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};

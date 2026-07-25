@@ -567,7 +567,7 @@ export async function getStatusSummary(
         }
       : undefined,
     heartbeat: {
-      defaultAgentId: agentList.defaultId,
+      ...(agentList.defaultId ? { defaultAgentId: agentList.defaultId } : {}),
       agents: heartbeatAgents,
     },
     channelSummary,

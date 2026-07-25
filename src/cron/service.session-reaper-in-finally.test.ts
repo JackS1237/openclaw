@@ -239,6 +239,41 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
+  it("sweeps explicit multi-agent stores without a configured default", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    for (const agentId of ["ops", "research"]) {
+      await replaceSessionEntry(
+        {
+          agentId,
+          storePath: sessionStorePath,
+          sessionKey: `agent:${agentId}:cron:expired:run:stale`,
+        },
+        { sessionId: `${agentId}-expired`, updatedAt: now - 25 * 3_600_000 },
+      );
+    }
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      resolveDefaultAgentId: () => undefined,
+      resolveSessionStoreAgentIds: () => ["ops", "research"],
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await expect(onTimer(state)).resolves.toBeUndefined();
+      expect(listSessionEntries({ agentId: "ops", storePath: sessionStorePath })).toEqual([]);
+      expect(listSessionEntries({ agentId: "research", storePath: sessionStorePath })).toEqual([]);
+    });
+  });
+
   it("sweeps a persisted owner after it leaves the roster and cron store", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");

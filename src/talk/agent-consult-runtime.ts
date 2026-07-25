@@ -263,7 +263,12 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
 }): Promise<RealtimeVoiceAgentConsultResult> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const agentId =
+    params.agentId ??
+    resolveDefaultAgentId(params.cfg, {
+      surface: `${params.surface} consult routing`,
+      hint: "Pass the owning agent id from the Talk/voice/meeting surface target.",
+    });
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {

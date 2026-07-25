@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   clearAuthProfileMigrationDiagnostics,
@@ -315,7 +315,10 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    addCandidate(candidates, resolveAgentDir(cfg, soleAgentId, env));
+  }
   const envAgentDir =
     readNonEmptyString(env.OPENCLAW_AGENT_DIR) ?? readNonEmptyString(env.PI_CODING_AGENT_DIR);
   if (envAgentDir) {
@@ -498,7 +501,11 @@ function isDefaultAgentCandidate(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return path.resolve(candidate.agentDir ?? "") === path.resolve(resolveDefaultAgentDir(cfg, env));
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  return (
+    soleAgentId !== undefined &&
+    path.resolve(candidate.agentDir ?? "") === path.resolve(resolveAgentDir(cfg, soleAgentId, env))
+  );
 }
 
 function stripImportedConfigAuthProfileCredentials(

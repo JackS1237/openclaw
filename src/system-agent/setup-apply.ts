@@ -193,7 +193,7 @@ function applySystemAgentModelSelectionWithModules(
 
   if (params.agentRuntimeId) {
     if (!agent) {
-      agent = { default: true };
+      agent = {};
       agentEntries[agentEntryKey] = agent;
     }
     const agentModels = { ...agent.models };

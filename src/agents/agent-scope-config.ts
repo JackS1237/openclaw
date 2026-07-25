@@ -21,6 +21,31 @@ export type ListedAgentEntry = {
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
 
+export type AgentSelectionContext = {
+  surface: string;
+  hint: string;
+};
+
+/** Raised when an operation needs one agent but a multi-agent roster has no explicit owner. */
+export class AgentSelectionRequiredError extends Error {
+  readonly code = "AGENT_SELECTION_REQUIRED";
+  readonly agentIds: string[];
+  readonly surface: string;
+  readonly hint: string;
+
+  constructor(agentIds: string[], context?: AgentSelectionContext) {
+    const surface = context?.surface ?? "this operation";
+    const hint =
+      context?.hint ??
+      "Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.";
+    super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
+    this.name = "AgentSelectionRequiredError";
+    this.agentIds = agentIds;
+    this.surface = surface;
+    this.hint = hint;
+  }
+}
+
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
@@ -141,30 +166,45 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids;
 }
 
-/** Resolves the configured default while preserving the shipped Plugin SDK legacy shape. */
-export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
+/** Returns the sole configured agent, tolerating only the shipped pre-roster SDK shape. */
+export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
-    // Runtime config loading materializes this entry. Keep the roster-property-absent
-    // case for shipped Plugin SDK callers that still pass a pre-roster config object.
     if (!hasAgentRosterProperty(cfg)) {
       return LEGACY_IMPLICIT_AGENT_ID;
     }
-    throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
-  }
-  // Runtime config loading canonicalizes zero/multiple markers before this helper is called.
-  // External SDK callers may still pass the shipped list shape, which chose the first candidate.
-  return normalizeAgentId((agents.find((agent) => agent?.default === true) ?? agents[0])!.id);
-}
-
-/** Returns the configured default when diagnostics must tolerate an invalid raw roster. */
-export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
-  const defaults = agents.filter((agent) => agent?.default === true);
-  if (defaults.length !== 1) {
     return undefined;
   }
-  return normalizeAgentId(defaults[0]!.id);
+  return agents.length === 1 ? normalizeAgentId(agents[0]!.id) : undefined;
+}
+
+/** Resolves the sole configured agent or raises a typed owner-selection error. */
+export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelectionContext): string {
+  const agents = listAgentEntries(cfg);
+  const sole = tryResolveSoleAgentId(cfg);
+  if (sole) {
+    return sole;
+  }
+  if (agents.length === 0) {
+    throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
+  }
+  throw new AgentSelectionRequiredError(
+    agents.map((agent) => normalizeAgentId(agent.id)),
+    context,
+  );
+}
+
+/** @deprecated Use resolveSoleAgentId; stored default markers are retired. */
+export function resolveDefaultAgentId(
+  cfg: OpenClawConfig,
+  context?: AgentSelectionContext,
+): string {
+  return resolveSoleAgentId(cfg, context);
+}
+
+/** @deprecated Use tryResolveSoleAgentId; stored default markers are retired. */
+export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  return tryResolveSoleAgentId(cfg);
 }
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -270,9 +310,9 @@ export function resolveAgentWorkspaceDir(
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveSoleAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  if (id === defaultAgentId) {
+  if (defaultAgentId && id === defaultAgentId) {
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
     }

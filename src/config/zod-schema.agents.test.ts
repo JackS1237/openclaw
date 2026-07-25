@@ -1,20 +1,25 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-describe("agent roster defaults", () => {
+describe("agent roster ownership", () => {
   it("rejects an empty roster after load-time migration", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });
 
-  it("requires exactly one default in a non-empty roster", () => {
-    expect(AgentsSchema.safeParse({ entries: { alpha: { default: true } } }).success).toBe(true);
-    for (const entries of [{ alpha: {} }, { alpha: { default: true }, beta: { default: true } }]) {
-      const result = AgentsSchema.safeParse({ entries });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toContainEqual(expect.objectContaining({ path: ["entries"] }));
-      }
+  it("accepts sole and multi-agent rosters without a stored default", () => {
+    expect(AgentsSchema.safeParse({ entries: { alpha: {} } }).success).toBe(true);
+    expect(AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } }).success).toBe(true);
+  });
+
+  it("rejects the retired default marker", () => {
+    const result = AgentsSchema.safeParse({ entries: { alpha: { default: true } } });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ path: ["entries", "alpha"] }),
+      );
     }
   });
 });
@@ -24,16 +29,16 @@ describe("explicit ambient agent targets", () => {
     {
       agents: {
         defaults: { heartbeat: { agentId: "missing" } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     },
     {
       agents: {
         defaults: { systemAgent: { agentId: "missing" } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     },
-    { agents: { entries: { main: { default: true } } }, talk: { agentId: "missing" } },
+    { agents: { entries: { main: {} } }, talk: { agentId: "missing" } },
   ])("rejects an unknown explicit target", (target) => {
     const result = OpenClawSchema.safeParse(target);
     expect(result.success).toBe(false);
@@ -50,7 +55,7 @@ describe("explicit ambient agent targets", () => {
             heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
           },
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         },
         talk: { agentId: "ops" },
       }).success,
@@ -61,16 +66,16 @@ describe("explicit ambient agent targets", () => {
     {
       agents: {
         defaults: { heartbeat: { agentId: " " } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     },
     {
       agents: {
         defaults: { systemAgent: { agentId: " " } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     },
-    { agents: { entries: { main: { default: true } } }, talk: { agentId: " " } },
+    { agents: { entries: { main: {} } }, talk: { agentId: " " } },
   ])("rejects blank explicit targets", (config) => {
     expect(OpenClawSchema.safeParse(config).success).toBe(false);
   });
@@ -78,5 +83,46 @@ describe("explicit ambient agent targets", () => {
   it("validates targets against the implicit main roster", () => {
     expect(OpenClawSchema.safeParse({ talk: { agentId: "main" } }).success).toBe(true);
     expect(OpenClawSchema.safeParse({ talk: { agentId: "missing" } }).success).toBe(false);
+  });
+});
+
+describe("multi-agent ambient ownership warnings", () => {
+  it("warns for every ownerless ambient surface without invalidating config", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: { entries: { ops: {}, research: {} } },
+        channels: { telegram: { enabled: true } },
+      },
+      { pluginValidation: "skip" },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.warnings.map((warning) => warning.path)).toEqual([
+      "channels.telegram",
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
+  });
+
+  it("does not warn for sole-agent or explicitly owned multi-agent config", () => {
+    for (const config of [
+      { agents: { entries: { solo: {} } } },
+      {
+        agents: {
+          defaults: {
+            heartbeat: { agentId: "ops" },
+            systemAgent: { agentId: "ops" },
+          },
+          entries: { ops: {}, research: {} },
+        },
+        channels: { telegram: { enabled: true } },
+        bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+        talk: { agentId: "ops" },
+      },
+    ]) {
+      const result = validateConfigObjectWithPlugins(config, { pluginValidation: "skip" });
+      expect(result.ok).toBe(true);
+      expect(result.warnings).toEqual([]);
+    }
   });
 });

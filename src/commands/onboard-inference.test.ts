@@ -192,14 +192,14 @@ describe("detectInferenceBackends", () => {
     ]);
   });
 
-  it("prefers the configured default agent model over the global default", async () => {
+  it("uses the global model when a multi-agent fleet has no sole owner", async () => {
     const candidates = await detectInferenceBackends({
       config: {
         agents: {
           defaults: { model: "openai/gpt-5.5" },
           list: [
             { id: "fallback", model: "google/gemini-3.1-pro-preview" },
-            { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
+            { id: "ops", model: "anthropic/claude-opus-4-8" },
           ],
         },
       },
@@ -212,9 +212,7 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toMatchObject([
-      { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
-    ]);
+    expect(candidates).toMatchObject([{ kind: "existing-model", modelRef: "openai/gpt-5.5" }]);
   });
 
   it("captures the canonical target for an authored model alias", async () => {

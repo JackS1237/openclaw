@@ -95,7 +95,8 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   routing: 1,
-  health: 0,
+  // +1: deprecated default-agent resolver alias retained for source compatibility.
+  health: 1,
   "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
@@ -117,7 +118,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-payload": 2,
   // +1: flushLogger projected through the deprecated text-runtime barrel.
   "text-runtime": 192,
-  "agent-runtime": 2,
+  // +1: deprecated default-agent resolver alias retained beside sole-agent resolution.
+  "agent-runtime": 3,
+  // +1: deprecated default-agent resolver alias retained for memory plugins.
+  "memory-host-core": 1,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
@@ -189,7 +193,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: process-local sessions.changed plugin notification payload.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      4740,
+      // +4: sole-agent resolver functions, typed selection error, and context type.
+      4744,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -219,7 +224,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: authoritative model-picker session-apply operation.
       // +1: logger file-transport flush for graceful shutdown drains.
       // +1: loopback-only host classifier for plugin local-machine boundaries.
-      2869,
+      // +2: throwing and non-throwing sole-agent resolvers.
+      2871,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -229,7 +235,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
       // +1: flushLogger projected through the deprecated text-runtime barrel.
-      1701,
+      // +3: default-agent resolver aliases retained across existing public surfaces.
+      1704,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

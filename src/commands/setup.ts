@@ -165,7 +165,11 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntry = resolveAgentEntry(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  const setupAgentId = resolveDefaultAgentId(resolvedConfig, {
+    surface: "setup workspace selection",
+    hint: "Run setup for a sole-agent config or select the target agent in onboarding.",
+  });
+  const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
@@ -197,7 +201,7 @@ export async function setupCommand(
       const roster = structuredClone(listAgentEntries(next));
       if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
         for (const entry of roster) {
-          if (entry.default === true) {
+          if (entry.id === setupAgentId) {
             // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.
             // Inherited defaults must not turn an include-owned roster into a roster write.
             entry.workspace = workspace;

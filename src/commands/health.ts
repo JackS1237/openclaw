@@ -4,7 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
@@ -319,7 +319,7 @@ const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 const resolveAgentOrder = (cfg: OpenClawConfig) => {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
@@ -339,11 +339,11 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
     ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
   }
 
-  if (!seen.has(defaultAgentId)) {
+  if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
 
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && defaultAgentId) {
     ordered.push({ id: defaultAgentId });
   }
 
@@ -583,15 +583,15 @@ export async function getHealthSnapshot(params?: {
       sessions,
     });
   }
-  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const heartbeatSeconds = defaultAgent?.heartbeat.everyMs
-    ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+  const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const heartbeatSeconds = summaryAgent?.heartbeat.everyMs
+    ? Math.round(summaryAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
-    defaultAgent?.sessions ??
+    summaryAgent?.sessions ??
     (await buildSessionSummary(
-      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
-      defaultAgentId,
+      resolveStorePath(cfg.session?.store, { agentId: summaryAgent?.agentId }),
+      summaryAgent?.agentId,
     ));
 
   const start = Date.now();
@@ -613,7 +613,9 @@ export async function getHealthSnapshot(params?: {
       cfg,
       accountIds,
     });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+    const boundAccounts = defaultAgentId
+      ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+      : [];
     const preferredAccountId = resolvePreferredAccountId({
       accountIds,
       defaultAccountId,
@@ -777,7 +779,7 @@ export async function getHealthSnapshot(params?: {
     channelOrder,
     channelLabels,
     heartbeatSeconds,
-    defaultAgentId,
+    ...(defaultAgentId ? { defaultAgentId } : {}),
     agents,
     sessions: {
       path: sessions.path,
@@ -882,15 +884,18 @@ export async function healthCommand(
               return {
                 agentId: entry.id,
                 name: entry.name,
-                isDefault: entry.id === localAgents.defaultAgentId,
+                isDefault:
+                  localAgents.defaultAgentId !== undefined &&
+                  entry.id === localAgents.defaultAgentId,
                 heartbeat: resolveHeartbeatSummary(cfg, entry.id),
                 sessions: await buildSessionSummary(storePath, entry.id),
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -954,7 +959,9 @@ export async function healthCommand(
         const preferred = resolvePreferredAccountId({
           accountIds,
           defaultAccountId,
-          boundAccounts: channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [],
+          boundAccounts: defaultAgentId
+            ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+            : [],
         });
         return [plugin.id, [preferred] as string[]] as const;
       }),
@@ -1019,7 +1026,9 @@ export async function healthCommand(
       if (!plugin.status?.logSelfId) {
         continue;
       }
-      const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
       const accountIds = plugin.config.listAccountIds(cfg);
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,

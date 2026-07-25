@@ -120,9 +120,13 @@ export { extractAssistantText } from "../agents/embedded-agent-utils.js";
 export { jsonResult } from "../agents/tools/tool-results.js";
 export { readStringParam } from "../agents/tools/common.js";
 export {
+  AgentSelectionRequiredError,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
+export type { AgentSelectionContext } from "../agents/agent-scope-config.js";
 export { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 export { resolveThinkingDefault } from "../agents/model-thinking-default.js";

@@ -1,24 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../../../agents/agent-scope-config.js";
-import type { AgentRouteBinding } from "../../../config/types.agents.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeRouteBindingChannelId } from "../../../routing/binding-scope.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
-import { isRecord } from "../../../utils.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
+import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
+import type { AgentRouteBinding } from "./types.agents.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-type DefaultAgentRoleMaterialization = {
+export type LegacyDefaultAgentRoleMaterialization = {
   config: OpenClawConfig;
   changes: string[];
 };
-
-function resolveLegacyMultiAgentDefault(cfg: OpenClawConfig): string | undefined {
-  const entries = listAgentEntries(cfg);
-  if (entries.length < 2) {
-    return undefined;
-  }
-  const defaults = entries.filter((entry) => entry.default === true);
-  return defaults.length === 1 ? normalizeAgentId(defaults[0]!.id) : undefined;
-}
 
 function listAmbientConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   if (!isRecord(cfg.channels)) {
@@ -52,29 +44,49 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
   );
 }
 
-/**
- * Materialize only ambient roles that currently fall through to a multi-agent default.
- * The marker remains authoritative in H2-0; these explicit targets are preparation for H2-1.
- */
-export function materializeDefaultAgentRoles(cfg: OpenClawConfig): DefaultAgentRoleMaterialization {
-  const defaultAgentId = resolveLegacyMultiAgentDefault(cfg);
-  if (!defaultAgentId) {
-    return { config: cfg, changes: [] };
+export function listUnboundAmbientChannelIds(cfg: OpenClawConfig): string[] {
+  if (cfg.bindings !== undefined && !Array.isArray(cfg.bindings)) {
+    return [];
   }
-
-  let next = cfg;
-  const changes: string[] = [];
-  const canMaterializeBindings = cfg.bindings === undefined || Array.isArray(cfg.bindings);
   const bindings = Array.isArray(cfg.bindings)
     ? cfg.bindings.filter(
         (binding): binding is AgentRouteBinding => isRecord(binding) && binding.type !== "acp",
       )
     : [];
-  const missingChannelBindings = canMaterializeBindings
-    ? listAmbientConfiguredChannelIds(cfg).filter(
-        (channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)),
-      )
-    : [];
+  return listAmbientConfiguredChannelIds(cfg).filter(
+    (channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)),
+  );
+}
+
+/** Materializes the retired marker's ambient roles before the marker is stripped. */
+export function materializeLegacyDefaultAgentRoles(
+  cfg: OpenClawConfig,
+  legacyDefaultAgentId: string,
+  options: { materializeWorkspace?: boolean; env?: NodeJS.ProcessEnv } = {},
+): LegacyDefaultAgentRoleMaterialization {
+  const defaultAgentId = normalizeAgentId(legacyDefaultAgentId);
+  let next = cfg;
+  const changes: string[] = [];
+  const missingChannelBindings = listUnboundAmbientChannelIds(cfg);
+  if (options.materializeWorkspace) {
+    const entries = { ...(next.agents?.entries ?? {}) };
+    const entryKey = Object.keys(entries).find(
+      (candidate) => normalizeAgentId(candidate) === defaultAgentId,
+    );
+    const entry = entryKey ? entries[entryKey] : undefined;
+    if (entry && !normalizeOptionalString(entry.workspace)) {
+      entries[entryKey!] = {
+        ...entry,
+        workspace:
+          normalizeOptionalString(next.agents?.defaults?.workspace) ??
+          resolveDefaultAgentWorkspaceDir(options.env),
+      };
+      next = { ...next, agents: { ...next.agents, entries } };
+      changes.push(
+        `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
+      );
+    }
+  }
   if (missingChannelBindings.length > 0) {
     next = {
       ...next,
@@ -95,8 +107,7 @@ export function materializeDefaultAgentRoles(cfg: OpenClawConfig): DefaultAgentR
   const defaultsConfig = isRecord(rawDefaults) ? rawDefaults : undefined;
   const canMaterializeDefaults = rawDefaults === undefined || defaultsConfig !== undefined;
   const hasPerAgentHeartbeat = listAgentEntries(cfg).some((entry) => Boolean(entry.heartbeat));
-  // A shared defaults heartbeat already fans out to every agent. Pinning it here
-  // would silently narrow existing multi-agent enrollment to the legacy default.
+  // Shared defaults already fan out to every agent; a target would narrow enrollment.
   if (canMaterializeDefaults && !hasPerAgentHeartbeat && defaultsConfig?.heartbeat === undefined) {
     next = {
       ...next,

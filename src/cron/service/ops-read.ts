@@ -21,7 +21,7 @@ import {
   ensureLoadedForRead,
   ownsStreamSource,
   resolveCurrentDefaultAgentId,
-  resolveEffectiveJobAgentId,
+  tryResolveEffectiveJobAgentId,
 } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";
 import { emit } from "./state.js";
@@ -276,7 +276,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (
         requestedAgentId &&
-        resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
+        tryResolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
       ) {
         return false;
       }

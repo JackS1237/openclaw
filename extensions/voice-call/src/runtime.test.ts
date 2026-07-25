@@ -258,6 +258,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
   });
 
+  it("reports disabled configuration before requiring a multi-agent owner", async () => {
+    const config = createBaseConfig();
+    config.enabled = false;
+    await expect(
+      createVoiceCallRuntime({
+        config,
+        coreConfig: {},
+        fullConfig: { agents: { entries: { ops: {}, research: {} } } },
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toThrow("Voice call disabled");
+  });
+
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
@@ -325,6 +338,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
     const config = createBaseConfig();
+    config.agentId = "operator";
     config.realtime.enabled = true;
     config.realtime.agentContext = {
       enabled: true,
@@ -334,7 +348,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       files: ["SOUL.md"],
     };
     const fullConfig = {
-      agents: { list: [{ id: "operator", default: true }, { id: "support" }] },
+      agents: { entries: { operator: {}, support: {} } },
     } as OpenClawConfig;
     const resolveAgentIdentity = vi.fn((_cfg: OpenClawConfig, agentId: string) => ({
       name: agentId === "support" ? "Support Voice" : "Main Voice",

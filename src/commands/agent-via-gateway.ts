@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -40,6 +40,7 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import { resolveCliAgentId, type CliAgentSelectionDeps } from "./agent-selection.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -96,6 +97,7 @@ type AgentCliProcessLike = {
 };
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
+  agentSelection?: CliAgentSelectionDeps;
 };
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
@@ -358,6 +360,8 @@ function validateExplicitSessionKeyForDispatch(
 
 async function normalizeSessionKeyOptsForDispatch(
   opts: AgentDispatchOpts,
+  runtime: RuntimeEnv,
+  deps?: AgentCliDeps,
 ): Promise<AgentDispatchOpts> {
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
@@ -370,7 +374,27 @@ async function normalizeSessionKeyOptsForDispatch(
   }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
-  const agentIdRaw = opts.agent?.trim();
+  let agentIdRaw = opts.agent?.trim();
+  const hasAgentScopedTarget = [rawSessionKey, rawTo].some(
+    (value) => classifySessionKeyShape(value) === "agent",
+  );
+  if (!agentIdRaw && !hasAgentScopedTarget) {
+    const cfg = opts.local === true ? await loadRuntimeConfig() : readGatewayDispatchConfig();
+    const selectedAgentId = await resolveCliAgentId({
+      cfg,
+      runtime,
+      surface: "agent turn",
+      deps: opts.json ? { ...deps?.agentSelection, interactive: false } : deps?.agentSelection,
+    });
+    const implicitSoleAgent = tryResolveSoleAgentId(cfg) === selectedAgentId;
+    agentIdRaw =
+      implicitSoleAgent && isUnscopedSessionKeySentinel(rawSessionKey)
+        ? undefined
+        : selectedAgentId;
+    if (!implicitSoleAgent) {
+      opts = { ...opts, agent: selectedAgentId };
+    }
+  }
   const shouldScopeDefaultAgentKey =
     isLegacySessionKey && !agentIdRaw && !isUnscopedSessionKeySentinel(rawSessionKey);
   const cfg =
@@ -380,7 +404,7 @@ async function normalizeSessionKeyOptsForDispatch(
         : readGatewayDispatchConfig()
       : undefined;
   const sessionKey = scopeLegacySessionKeyToAgent({
-    agentId: agentIdRaw ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg!) : undefined),
+    agentId: agentIdRaw,
     sessionKey: opts.sessionKey,
     mainKey: cfg?.session?.mainKey,
   });
@@ -887,7 +911,7 @@ export async function agentCliCommand(
     runtime.exit(1);
     return undefined;
   }
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts, runtime, deps);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts

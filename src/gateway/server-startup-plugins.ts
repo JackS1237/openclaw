@@ -1,7 +1,8 @@
 // Gateway plugin startup bootstrap.
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -128,8 +129,10 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const soleAgentId = tryResolveDefaultAgentId(gatewayPluginConfig);
+  const defaultWorkspaceDir = soleAgentId
+    ? resolveAgentWorkspaceDir(gatewayPluginConfig, soleAgentId)
+    : resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined

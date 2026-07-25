@@ -168,7 +168,10 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const rosterMigration = migratePersistedImplicitMainRoster(
+      readResolution.resolvedConfigRaw,
+      deps.env,
+    );
     envVarWarnings.push(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );

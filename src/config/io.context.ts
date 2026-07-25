@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  tryResolveDefaultAgentId,
+} from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import {
   loadShellEnvFallback,
@@ -105,10 +108,12 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           return snapshot;
         }
         const metadataConfig = config;
-        const defaultAgentId = resolveDefaultAgentId(metadataConfig);
+        const soleAgentId = tryResolveDefaultAgentId(metadataConfig);
         snapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId, params.env),
+          workspaceDir: soleAgentId
+            ? resolveAgentWorkspaceDir(metadataConfig, soleAgentId, params.env)
+            : undefined,
           env: params.env,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({
@@ -126,7 +131,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, { ...deps, env });
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw).config);
+    return coerceConfig(
+      migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw, env).config,
+    );
   }
 
   function resolveSuspiciousRecoveryBackupCandidate(parsed: unknown): OpenClawConfig | null {

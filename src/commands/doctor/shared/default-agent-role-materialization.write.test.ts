@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../config/io.js";
-import { materializeDefaultAgentRoles } from "./default-agent-role-materialization.js";
 
 const roots: string[] = [];
 
@@ -53,14 +52,14 @@ describe("default role materialization authored writes", () => {
     });
 
     const snapshot = await io.readConfigFileSnapshot();
-    const materialized = materializeDefaultAgentRoles(snapshot.config);
-    expect(materialized.changes.length).toBeGreaterThan(0);
-    await io.writeConfigFile(materialized.config, { baseSnapshot: snapshot });
+    expect(snapshot.config.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(snapshot.config.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+    await io.writeConfigFile(snapshot.config, { baseSnapshot: snapshot });
 
     const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
       agents?: {
         defaults?: { model?: string; heartbeat?: { agentId?: string } };
-        entries?: Record<string, { model?: string }>;
+        entries?: Record<string, { model?: string; default?: boolean; workspace?: string }>;
       };
       channels?: { $include?: string };
       bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
@@ -68,6 +67,10 @@ describe("default role materialization authored writes", () => {
     };
     expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
+    expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(persisted.agents?.entries?.ops?.workspace).toBe(
+      path.join(root, ".openclaw", "workspace"),
+    );
     expect(persisted.channels).toEqual({ $include: "./channels.json5" });
     await expect(fs.readFile(channelsPath, "utf-8")).resolves.toBe(includeRaw);
     expect(persisted.bindings).toContainEqual({
@@ -77,7 +80,9 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
 
+    const firstPersisted = await fs.readFile(configPath, "utf-8");
     const reread = await io.readConfigFileSnapshot();
-    expect(materializeDefaultAgentRoles(reread.config).changes).toEqual([]);
+    await io.writeConfigFile(reread.config, { baseSnapshot: reread });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(firstPersisted);
   });
 });

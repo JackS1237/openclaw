@@ -185,9 +185,9 @@ const HealthSnapshotSchema = closedObject({
 
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
-  defaultAgentId: NonEmptyString,
+  defaultAgentId: Type.Optional(NonEmptyString),
   mainKey: NonEmptyString,
-  mainSessionKey: NonEmptyString,
+  mainSessionKey: Type.Optional(NonEmptyString),
   scope: Type.Optional(NonEmptyString),
 });
 

@@ -1,4 +1,5 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
@@ -18,14 +19,25 @@ export function resolveEffectiveJobAgentId(
   job: { agentId?: string | null; sessionKey?: string | null },
   defaultAgentId: string | undefined,
 ): string {
-  const agentId =
-    normalizeOptionalAgentId(job.agentId) ??
-    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
-    normalizeOptionalAgentId(defaultAgentId);
+  const agentId = tryResolveEffectiveJobAgentId(job, defaultAgentId);
   if (!agentId) {
-    throw new Error("Cron job requires an agent id or prepared configured default.");
+    throw new AgentSelectionRequiredError([], {
+      surface: "cron job creation",
+      hint: "Set the job agentId or pass --agent <id> when creating the cron job.",
+    });
   }
   return agentId;
+}
+
+export function tryResolveEffectiveJobAgentId(
+  job: { agentId?: string | null; sessionKey?: string | null },
+  defaultAgentId: string | undefined,
+): string | undefined {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId)
+  );
 }
 
 export function markManualCronJobActive(

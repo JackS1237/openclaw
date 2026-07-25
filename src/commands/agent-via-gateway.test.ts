@@ -736,23 +736,31 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("scopes legacy explicit session keys to the default agent when no agent is requested", async () => {
+  it("requires --agent for a legacy session key on a multi-agent fleet", async () => {
     await withTempStore(
       async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBeUndefined();
-        expect(params.sessionKey).toBe("agent:ops:incident-42");
+        await expect(
+          agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED", surface: "agent turn" });
+        expect(callGateway).not.toHaveBeenCalled();
       },
       { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
+  });
+
+  it("never opens the agent picker in JSON mode", async () => {
+    const selectAgent = vi.fn(async () => "ops");
+    await withTempStore(
+      async () => {
+        await expect(
+          agentCliCommand({ message: "hi", json: true }, runtime, {
+            agentSelection: { interactive: true, selectAgent },
+          }),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED", surface: "agent turn" });
+        expect(selectAgent).not.toHaveBeenCalled();
+        expect(callGateway).not.toHaveBeenCalled();
+      },
+      { agents: { list: [{ id: "ops" }, { id: "research" }] } },
     );
   });
 
@@ -809,41 +817,25 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("preserves unscoped global session keys when no agent is requested", async () => {
+  it("requires --agent for an unscoped global key on a multi-agent fleet", async () => {
     await withTempStore(
       async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBeUndefined();
-        expect(params.sessionKey).toBe("global");
+        await expect(
+          agentCliCommand({ message: "hi", sessionKey: "global" }, runtime),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED", surface: "agent turn" });
+        expect(callGateway).not.toHaveBeenCalled();
       },
       { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
     );
   });
 
-  it("preserves unscoped unknown session keys when no agent is requested", async () => {
+  it("requires --agent for an unscoped unknown key on a multi-agent fleet", async () => {
     await withTempStore(
       async () => {
-        mockGatewaySuccessReply();
-
-        await agentCliCommand({ message: "hi", sessionKey: "unknown" }, runtime);
-
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBeUndefined();
-        expect(params.sessionKey).toBe("unknown");
+        await expect(
+          agentCliCommand({ message: "hi", sessionKey: "unknown" }, runtime),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED", surface: "agent turn" });
+        expect(callGateway).not.toHaveBeenCalled();
       },
       { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
     );

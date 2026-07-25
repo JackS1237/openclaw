@@ -1,5 +1,5 @@
 // Builds runtime config schema defaults from agent and workspace state.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   collectChannelSchemaMetadata,
@@ -11,7 +11,8 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 // Runtime schemas include currently loaded plugin/channel metadata for accurate UI fields.
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env);
+  const soleAgentId = tryResolveDefaultAgentId(config);
+  const workspaceDir = soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId, env) : undefined;
   return resolvePluginMetadataSnapshot({
     config,
     env: env ?? process.env,
@@ -34,7 +35,7 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const snapshot = await readConfigFileSnapshot({ observe: false });
   const config = snapshot.valid
     ? snapshot.config
-    : { agents: { list: [{ id: "main", default: true }] }, plugins: { enabled: true } };
+    : { agents: { list: [{ id: "main" }] }, plugins: { enabled: true } };
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: snapshot.valid ? collectPluginSchemaMetadata(registry) : [],

@@ -7,6 +7,8 @@ export {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveSoleAgentId,
+  tryResolveSoleAgentId,
   resolveSessionAgentId,
 } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";

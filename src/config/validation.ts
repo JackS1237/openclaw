@@ -5,7 +5,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntriesWithSource,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -20,6 +20,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
+import { collectAgentOwnershipWarnings } from "./agent-ownership-warnings.js";
 import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
@@ -127,12 +128,13 @@ function validateConfigObjectWithPluginsBase(
         manifestRegistry: registryInfo?.registry,
       })
     : base.config;
+  const ownershipWarnings = collectAgentOwnershipWarnings(config);
   if (opts.pluginValidation === "skip") {
-    return { ok: true, config, warnings: [] };
+    return { ok: true, config, warnings: ownershipWarnings };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...ownershipWarnings];
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
@@ -177,7 +179,10 @@ function validateConfigObjectWithPluginsBase(
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
       return registryInfo;
     }
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), opts.env);
+    const soleAgentId = tryResolveDefaultAgentId(config);
+    const workspaceDir = soleAgentId
+      ? resolveAgentWorkspaceDir(config, soleAgentId, opts.env)
+      : undefined;
     const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,

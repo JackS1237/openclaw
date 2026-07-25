@@ -95,7 +95,7 @@ export const AgentsListParamsSchema = closedObject({});
 
 /** Agent list result including the default agent and session scoping mode. */
 export const AgentsListResultSchema = closedObject({
-  defaultId: NonEmptyString,
+  defaultId: Type.Optional(NonEmptyString),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
