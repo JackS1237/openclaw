@@ -1,5 +1,6 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
+import { retainLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -9,8 +10,8 @@ type MigrationResult = {
   diagnostics: string[];
 };
 
-/** Returns the H2-0 effective owner only for legacy multi-agent roster shapes. */
-export function tryResolveLegacyMultiAgentDefaultId(raw: unknown): string | undefined {
+/** Returns the effective owner encoded by a legacy roster/default-marker shape. */
+export function tryResolveLegacyDefaultAgentId(raw: unknown): string | undefined {
   const rosterProperty = readAgentRosterProperty(raw);
   if (!rosterProperty) {
     return undefined;
@@ -29,9 +30,6 @@ export function tryResolveLegacyMultiAgentDefaultId(raw: unknown): string | unde
           !Array.isArray(rosterProperty.value)
         ? Object.entries(rosterProperty.value).map(([id, entry]) => ({ id, entry }))
         : [];
-  if (values.length < 2) {
-    return undefined;
-  }
   if (
     values.some((candidate) => {
       if (
@@ -105,7 +103,7 @@ export function migratePersistedImplicitMainRoster(
     root.agents && typeof root.agents === "object" && !Array.isArray(root.agents)
       ? (root.agents as Record<string, unknown>)
       : {};
-  const rawLegacyDefaultAgentId = tryResolveLegacyMultiAgentDefaultId({ ...root, agents });
+  const rawLegacyDefaultAgentId = tryResolveLegacyDefaultAgentId({ ...root, agents });
   const diagnostics: string[] = [];
   let changed = false;
   let legacyListOrder: string[] | undefined;
@@ -224,5 +222,7 @@ export function migratePersistedImplicitMainRoster(
     changed = true;
   }
 
-  return { config: changed ? nextRoot : raw, changed, diagnostics };
+  const config = (changed ? nextRoot : raw) as OpenClawConfig;
+  retainLegacyDefaultAgentId(config, legacyDefaultAgentId);
+  return { config, changed, diagnostics };
 }

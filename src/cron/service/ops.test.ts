@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
@@ -19,7 +20,11 @@ import { start, stop } from "./ops-lifecycle.js";
 import { add, remove, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { run } from "./ops-run.js";
-import { createCronServiceState, type CronEvent } from "./state.js";
+import {
+  createCronServiceState,
+  type CronEvent,
+  resolveCronServiceDefaultAgentId,
+} from "./state.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
@@ -113,6 +118,85 @@ describe("scheduled tool policy provenance", () => {
     if (state.timer) {
       clearTimeout(state.timer);
     }
+  });
+});
+
+describe("cron agent ownership reloads", () => {
+  const createInput = (name: string) => ({
+    name,
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "next-heartbeat" as const,
+    payload: { kind: "agentTurn" as const, message: name },
+  });
+
+  it("treats a live resolver's undefined as ownerless after a sole-to-multi transition", async () => {
+    const { storePath } = await makeStorePath();
+    let currentDefaultAgentId: string | undefined = "main";
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "stale-startup-owner",
+      resolveDefaultAgentId: () => currentDefaultAgentId,
+      isAgentAvailable: () => true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    const sole = await add(state, createInput("sole"));
+    expect(sole.agentId).toBe("main");
+
+    currentDefaultAgentId = undefined;
+    await expect(add(state, createInput("ownerless-multi"))).rejects.toBeInstanceOf(
+      AgentSelectionRequiredError,
+    );
+    expect(resolveCronServiceDefaultAgentId(state.deps)).toBeUndefined();
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("revalidates both cleared and retargeted session ownership patches", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const legacyJob = (id: string): CronJob => ({
+      id,
+      name: id,
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      sessionKey: "agent:main:main",
+      payload: { kind: "agentTurn", message: id },
+      state: {},
+    });
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [legacyJob("clear-owner"), legacyJob("unavailable-owner")],
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "stale-startup-owner",
+      resolveDefaultAgentId: () => undefined,
+      isAgentAvailable: (agentId) => agentId !== "retired",
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    await expect(update(state, "clear-owner", { sessionKey: undefined })).rejects.toBeInstanceOf(
+      AgentSelectionRequiredError,
+    );
+    await expect(
+      update(state, "unavailable-owner", { sessionKey: "agent:retired:main" }),
+    ).rejects.toThrow("cron job agent is unavailable: retired");
   });
 });
 

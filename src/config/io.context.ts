@@ -29,6 +29,7 @@ import {
 } from "./io.read-helpers.js";
 import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type { ConfigIoFactoryOptions, NormalizedConfigIoDeps } from "./io.types.js";
+import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -87,7 +88,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       cfg,
       () => pendingValue ?? crypto.randomBytes(32).toString("hex"),
     );
-    return applyConfigOverrides(
+    const finalized = applyConfigOverrides(
       retainGeneratedOwnerDisplaySecret({
         config: resolvedConfig,
         configPath,
@@ -95,6 +96,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         state: { pendingByPath: autoOwnerDisplaySecretByPath },
       }),
     );
+    return inheritLegacyDefaultAgentId(cfg, finalized);
   }
 
   function createValidationPluginMetadataSnapshotLoader(params: {

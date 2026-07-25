@@ -1,4 +1,5 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
@@ -20,6 +21,19 @@ export async function start(state: CronServiceState) {
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
     return;
+  }
+
+  if (state.deps.legacyDefaultAgentId) {
+    const migration = await materializeLegacyDefaultCronJobOwners({
+      storePath: state.deps.storePath,
+      legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
+    });
+    if (migration.warnings.length > 0) {
+      throw new Error(migration.warnings.join("\n"));
+    }
+    for (const change of migration.changes) {
+      state.deps.log.info({ storePath: state.deps.storePath }, `cron: ${change}`);
+    }
   }
 
   const interruptedJobIds = new Set<string>();

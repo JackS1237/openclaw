@@ -35,11 +35,10 @@ export function resolveMainSessionKey(cfg: OpenClawConfig): string {
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
 export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
-  const defaultAgentId = tryResolveDefaultAgentId(cfg) ?? "";
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const ownerSelection = defaultAgentId ? `selected:${normalizeAgentId(defaultAgentId)}` : "absent";
   const scope = cfg?.session?.scope ?? "per-sender";
-  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
-    "|",
-  );
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), ownerSelection].join("|");
 }
 
 export { resolveAgentIdFromSessionKey };

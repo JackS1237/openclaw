@@ -28,7 +28,7 @@ import {
   runWithCronAdmission,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import { type CronServiceState, emit } from "./state.js";
+import { type CronServiceState, emit, resolveCronServiceDefaultAgentId } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -181,7 +181,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
   );
   const sessionReaperDefaultAgentId = hasSessionReaperStore
-    ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
+    ? resolveCronServiceDefaultAgentId(state.deps)?.trim()
     : undefined;
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs

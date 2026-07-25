@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
+import { tryGetLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -434,6 +436,41 @@ describe("persisted implicit-main roster migration", () => {
         agents: { entries },
       });
     });
+  });
+
+  it("binds an env-activated Discord channel before retiring a multi-agent marker", async () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-only-token");
+    try {
+      await withTempHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: { entries: { ops: { default: true }, research: {} } },
+          }),
+        );
+        resetConfigRuntimeState();
+
+        const snapshot = await readConfigFileSnapshot();
+
+        expect(snapshot.config.bindings).toContainEqual({
+          agentId: "ops",
+          match: { channel: "discord", accountId: "*" },
+        });
+        expect(tryGetLegacyDefaultAgentId(snapshot.config)).toBe("ops");
+        expect(
+          resolveAgentRoute({
+            cfg: snapshot.config,
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "user-1" },
+          }).agentId,
+        ).toBe("ops");
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("materializes a sole legacy marker before preserving malformed siblings", () => {

@@ -339,7 +339,7 @@ export async function updateLoadedJob(params: {
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
   });
-  if (patch.agentId !== undefined) {
+  if ("agentId" in patch || "sessionKey" in patch) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);

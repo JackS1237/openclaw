@@ -3,6 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../config/io.js";
+import {
+  loadCronJobsStoreWithConfigJobsReadOnly,
+  resolveCronJobsStorePath,
+  saveCronJobsStore,
+} from "../../../cron/store.js";
+import type { CronJob } from "../../../cron/types.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 
 const roots: string[] = [];
 
@@ -98,5 +105,70 @@ describe("default role materialization authored writes", () => {
     const reread = await io.readConfigFileSnapshot();
     await io.writeConfigFile(reread.config, { baseSnapshot: reread });
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(firstPersisted);
+  });
+
+  it("persists a sole legacy cron owner before a roster write retires the marker", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-cron-owner-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const stateDir = path.join(root, "state-root");
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+    } as NodeJS.ProcessEnv;
+    const storePath = resolveCronJobsStorePath(undefined, env);
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: { entries: { ops: { default: true } } },
+      })}\n`,
+      "utf-8",
+    );
+    const ownerlessJob: CronJob = {
+      id: "ownerless",
+      name: "ownerless",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: {},
+    };
+
+    await withEnvAsync(env, async () => {
+      await saveCronJobsStore(storePath, { version: 1, jobs: [ownerlessJob] });
+      const io = createConfigIO({
+        configPath,
+        env,
+        homedir: () => root,
+        observe: false,
+        logger: { warn: () => {}, error: () => {} },
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      const nextConfig = {
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          entries: { ...snapshot.config.agents?.entries, research: {} },
+        },
+      };
+
+      await io.writeConfigFile(nextConfig, {
+        baseSnapshot: snapshot,
+        explicitSetPaths: [["agents", "entries"]],
+        explicitSetValueSource: nextConfig,
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: { entries?: Record<string, { default?: boolean }> };
+      };
+      expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+      expect(
+        (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
+      ).toBe("ops");
+    });
   });
 });

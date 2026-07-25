@@ -16,6 +16,7 @@ import {
   type CronUpdateOptions,
   type CronWakeMode,
   createCronServiceState,
+  resolveCronServiceDefaultAgentId,
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -217,7 +218,7 @@ export class CronService implements CronServiceContract {
   }
 
   getDefaultAgentId(): string | undefined {
-    return this.state.deps.defaultAgentId;
+    return resolveCronServiceDefaultAgentId(this.state.deps);
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {

@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
+import { resolveConfiguredChannelPresencePolicy } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -25,8 +26,14 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
+import {
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner.js";
+import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -73,32 +80,68 @@ export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
-    applyDefaults: true,
-    env: params?.env,
-    pluginValidation: params?.pluginValidation ?? "full",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
-  });
+  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  return materializeLegacyActiveChannelOwners(
+    validateConfigObjectWithPluginsBase(migrated, {
+      applyDefaults: true,
+      env: params?.env,
+      pluginValidation: params?.pluginValidation ?? "full",
+      pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+      loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+      sourceRaw: params?.sourceRaw,
+      preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
+    }),
+    migrated,
+    params?.env,
+  );
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
-    applyDefaults: false,
-    env: params?.env,
-    pluginValidation: params?.pluginValidation ?? "full",
-    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
-    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
-    sourceRaw: params?.sourceRaw,
-    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
-  });
+  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  return materializeLegacyActiveChannelOwners(
+    validateConfigObjectWithPluginsBase(migrated, {
+      applyDefaults: false,
+      env: params?.env,
+      pluginValidation: params?.pluginValidation ?? "full",
+      pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+      loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+      sourceRaw: params?.sourceRaw,
+      preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
+    }),
+    migrated,
+    params?.env,
+  );
+}
+
+function materializeLegacyActiveChannelOwners(
+  result: ValidateConfigWithPluginsResult,
+  migrated: OpenClawConfig,
+  env: NodeJS.ProcessEnv | undefined,
+): ValidateConfigWithPluginsResult {
+  if (!result.ok) {
+    return result;
+  }
+  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(migrated);
+  if (!legacyDefaultAgentId) {
+    return result;
+  }
+  const activationSourceConfig = applyPluginAutoEnable({ config: result.config, env }).config;
+  const ambientChannelIds = resolveConfiguredChannelPresencePolicy({
+    config: result.config,
+    activationSourceConfig,
+    env,
+    includePersistedAuthState: false,
+  })
+    .filter((entry) => entry.effective)
+    .map((entry) => entry.channelId);
+  const materialized = materializeLegacyDefaultAgentRoles(result.config, legacyDefaultAgentId, {
+    ambientChannelIds,
+  }).config;
+  retainLegacyDefaultAgentId(materialized, legacyDefaultAgentId);
+  return { ...result, config: materialized };
 }
 
 function validateConfigObjectWithPluginsBase(

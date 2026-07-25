@@ -1,5 +1,7 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { materializeLegacyDefaultCronJobOwners } from "../cron/legacy-default-agent-owner-migration.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -71,6 +73,7 @@ import {
 } from "./io.write-safety.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import { tryResolveLegacyDefaultAgentId } from "./legacy.roster.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -118,6 +121,24 @@ export async function writeConfigFileFromContext(
   const snapshot = snapshotRead.snapshot;
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+  }
+  // Both retired fields are raw-input-only: canonical next config cannot
+  // reassign agents.*.default or cron.store, so the pre-migration snapshot is
+  // the authoritative owner and store until this durable handoff completes.
+  const legacyDefaultAgentId = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
+    .map((source) => tryResolveLegacyDefaultAgentId(source))
+    .find((agentId) => agentId !== undefined);
+  if (legacyDefaultAgentId) {
+    const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
+      storePath: resolveCronJobsStorePathFromConfig(snapshot.config, deps.env),
+      legacyDefaultAgentId,
+      env: deps.env,
+    });
+    if (cronOwnerMigration.warnings.length > 0) {
+      throw new Error(
+        `Config write refused before retired default ownership was durable: ${cronOwnerMigration.warnings.join(" ")}`,
+      );
+    }
   }
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();

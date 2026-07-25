@@ -85,6 +85,8 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
+  /** Upgrade-only owner consumed by the startup SQLite migration. */
+  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate agent ownership inside the cron mutation lock. */
@@ -276,6 +278,13 @@ export type CronServiceState = {
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
 };
+
+/** Uses the static startup owner only when no live resolver was supplied. */
+export function resolveCronServiceDefaultAgentId(
+  deps: Pick<CronServiceDeps, "defaultAgentId" | "resolveDefaultAgentId">,
+): string | undefined {
+  return deps.resolveDefaultAgentId ? deps.resolveDefaultAgentId() : deps.defaultAgentId;
+}
 
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {

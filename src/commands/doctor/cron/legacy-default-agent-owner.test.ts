@@ -1,6 +1,7 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { CronService } from "../../../cron/service.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, saveCronJobsStore } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { materializeLegacyDefaultCronJobOwners } from "./legacy-repair.js";
@@ -55,5 +56,37 @@ describe("legacy default cron ownership", () => {
         legacyDefaultAgentId: "ops",
       }),
     ).resolves.toMatchObject({ changes: [] });
+  });
+
+  it("migrates an ownerless row before normal scheduler startup without Doctor", async () => {
+    const root = tempDirs.make("openclaw-cron-owner-startup-");
+    const storePath = path.join(root, "cron.sqlite");
+    await saveCronJobsStore(storePath, {
+      version: 1,
+      jobs: [legacyJob("ownerless")],
+    });
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    try {
+      await cron.start();
+      await expect(cron.run("ownerless", "force")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(runIsolatedAgentJob).toHaveBeenCalledWith(
+        expect.objectContaining({ job: expect.objectContaining({ agentId: "ops" }) }),
+      );
+      expect(
+        (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0]?.agentId,
+      ).toBe("ops");
+    } finally {
+      cron.stop();
+    }
   });
 });

@@ -14,19 +14,28 @@ export type LegacyDefaultAgentRoleMaterialization = {
   changes: string[];
 };
 
-function listAmbientConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  if (!isRecord(cfg.channels)) {
-    return [];
-  }
-  return Object.entries(cfg.channels)
-    .flatMap(([channelId, value]) => {
-      if (channelId === "defaults" || (isRecord(value) && value.enabled === false)) {
-        return [];
-      }
-      const normalized = normalizeRouteBindingChannelId(channelId);
-      return normalized ? [normalized] : [];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+function listAmbientConfiguredChannelIds(
+  cfg: OpenClawConfig,
+  ambientChannelIds: readonly string[] = [],
+): string[] {
+  const configured = isRecord(cfg.channels)
+    ? Object.entries(cfg.channels).flatMap(([channelId, value]) => {
+        if (channelId === "defaults" || (isRecord(value) && value.enabled === false)) {
+          return [];
+        }
+        const normalized = normalizeRouteBindingChannelId(channelId);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+  return [
+    ...new Set([
+      ...configured,
+      ...ambientChannelIds.flatMap((channelId) => {
+        const normalized = normalizeRouteBindingChannelId(channelId);
+        return normalized ? [normalized] : [];
+      }),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): boolean {
@@ -46,7 +55,10 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
   );
 }
 
-export function listUnboundAmbientChannelIds(cfg: OpenClawConfig): string[] {
+export function listUnboundAmbientChannelIds(
+  cfg: OpenClawConfig,
+  ambientChannelIds: readonly string[] = [],
+): string[] {
   if (cfg.bindings !== undefined && !Array.isArray(cfg.bindings)) {
     return [];
   }
@@ -55,7 +67,7 @@ export function listUnboundAmbientChannelIds(cfg: OpenClawConfig): string[] {
         (binding): binding is AgentRouteBinding => isRecord(binding) && binding.type !== "acp",
       )
     : [];
-  return listAmbientConfiguredChannelIds(cfg).filter(
+  return listAmbientConfiguredChannelIds(cfg, ambientChannelIds).filter(
     (channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)),
   );
 }
@@ -64,12 +76,16 @@ export function listUnboundAmbientChannelIds(cfg: OpenClawConfig): string[] {
 export function materializeLegacyDefaultAgentRoles(
   cfg: OpenClawConfig,
   legacyDefaultAgentId: string,
-  options: { materializeWorkspace?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    materializeWorkspace?: boolean;
+    env?: NodeJS.ProcessEnv;
+    ambientChannelIds?: readonly string[];
+  } = {},
 ): LegacyDefaultAgentRoleMaterialization {
   const defaultAgentId = normalizeAgentId(legacyDefaultAgentId);
   let next = cfg;
   const changes: string[] = [];
-  const missingChannelBindings = listUnboundAmbientChannelIds(cfg);
+  const missingChannelBindings = listUnboundAmbientChannelIds(cfg, options.ambientChannelIds);
   if (options.materializeWorkspace) {
     const entries = { ...next.agents?.entries };
     const entryKey = Object.keys(entries).find(

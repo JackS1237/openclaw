@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { materializeLegacyDefaultCronJobOwners as materializeLegacyDefaultCronJobOwnersInStore } from "../../../cron/legacy-default-agent-owner-migration.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -13,7 +14,6 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
@@ -80,39 +80,11 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
   if (!state || state.rawJobs.length === 0) {
     return { changes: [], warnings: [] };
   }
-  const agentId = normalizeAgentId(params.legacyDefaultAgentId);
-  let rewritten = 0;
-  for (const job of state.rawJobs) {
-    const explicitAgentId = normalizeOptionalString(job.agentId);
-    const scopedAgentId = parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
-    if (explicitAgentId || scopedAgentId) {
-      continue;
-    }
-    job.agentId = agentId;
-    rewritten += 1;
-  }
-  if (rewritten === 0) {
-    return { changes: [], warnings: [] };
-  }
-  try {
-    await saveCronJobsStore(state.storePath, {
-      version: 1,
-      jobs: state.rawJobs as unknown as CronJob[],
-    });
-  } catch (err) {
-    return {
-      changes: [],
-      warnings: [
-        `Failed writing cron owners at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`,
-      ],
-    };
-  }
-  return {
-    changes: [
-      `Assigned ${pluralize(rewritten, "legacy cron job")} to agent "${agentId}" before retiring the stored default.`,
-    ],
-    warnings: [],
-  };
+  return await materializeLegacyDefaultCronJobOwnersInStore({
+    storePath: state.storePath,
+    legacyDefaultAgentId: params.legacyDefaultAgentId,
+    records: state.rawJobs,
+  });
 }
 
 function pluralize(count: number, noun: string) {

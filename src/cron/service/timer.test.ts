@@ -247,6 +247,36 @@ describe("cron service timer seam coverage", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("fails closed when a live roster reload removes the sole implicit owner", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const ownerless = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    delete ownerless.sessionKey;
+    await writeCronStoreSnapshot({ storePath, jobs: [ownerless] });
+    const enqueueSystemEvent = vi.fn();
+    let currentDefaultAgentId: string | undefined = "main";
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      defaultAgentId: "stale-startup-owner",
+      resolveDefaultAgentId: () => currentDefaultAgentId,
+      enqueueSystemEvent,
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    currentDefaultAgentId = undefined;
+    await onTimer(state);
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect((await loadCronStore(storePath)).jobs[0]?.state).toMatchObject({
+      lastStatus: "error",
+      lastError: expect.stringContaining("cron job execution has no explicit owner"),
+    });
+  });
+
   it("uses the persisted execution timestamp for the canonical timer task", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");

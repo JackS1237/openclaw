@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { materializeLegacyDefaultCronJobOwnersInRecords } from "../legacy-default-agent-owner-records.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -352,6 +353,36 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
       .orderBy("updated_at", "asc")
       .orderBy("job_id", "asc"),
   ).rows;
+}
+
+/** Materializes retired default ownership without rewriting unrelated cron row fields. */
+export function materializeCronRowAgentOwners(
+  db: DatabaseSync,
+  storeKey: string,
+  legacyDefaultAgentId: string,
+): number {
+  let rewritten = 0;
+  for (const row of loadCronRows(db, storeKey)) {
+    const owner = { agentId: row.agent_id, sessionKey: row.session_key };
+    if (
+      materializeLegacyDefaultCronJobOwnersInRecords([owner], legacyDefaultAgentId) === 0 ||
+      typeof owner.agentId !== "string"
+    ) {
+      continue;
+    }
+    const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+    jobJson.agentId = owner.agentId;
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({ agent_id: owner.agentId, job_json: JSON.stringify(jobJson) })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", row.job_id),
+    );
+    rewritten += 1;
+  }
+  return rewritten;
 }
 
 /** Replaces all persisted cron rows for one store key from the config store snapshot. */

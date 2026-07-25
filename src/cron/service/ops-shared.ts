@@ -6,7 +6,7 @@ import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import { type CronServiceState, resolveCronServiceDefaultAgentId } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -94,7 +94,7 @@ export async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Resolves the current configured default agent without caching reloadable state. */
 export function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return resolveCronServiceDefaultAgentId(state.deps);
 }
 
 /** Returns whether a stream event still belongs to the job's current logical source. */
