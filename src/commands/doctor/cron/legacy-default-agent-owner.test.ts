@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, saveCronJobsStore } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { materializeLegacyDefaultCronJobOwners } from "./legacy-repair.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function legacyJob(id: string, sessionKey?: string): CronJob {
   return {
@@ -25,7 +26,7 @@ function legacyJob(id: string, sessionKey?: string): CronJob {
 
 describe("legacy default cron ownership", () => {
   it("persists the retired default only on ownerless jobs", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-owner-"));
+    const root = tempDirs.make("openclaw-cron-owner-");
     const storePath = path.join(root, "cron.sqlite");
     await saveCronJobsStore(storePath, {
       version: 1,
