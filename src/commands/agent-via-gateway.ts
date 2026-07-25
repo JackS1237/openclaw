@@ -363,6 +363,7 @@ async function normalizeSessionKeyOptsForDispatch(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ): Promise<AgentDispatchOpts> {
+  let normalizedOpts = opts;
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
@@ -392,27 +393,27 @@ async function normalizeSessionKeyOptsForDispatch(
         ? undefined
         : selectedAgentId;
     if (!implicitSoleAgent) {
-      opts = { ...opts, agent: selectedAgentId };
+      normalizedOpts = { ...opts, agent: selectedAgentId };
     }
   }
   const shouldScopeDefaultAgentKey =
     isLegacySessionKey && !agentIdRaw && !isUnscopedSessionKeySentinel(rawSessionKey);
   const cfg =
     isLegacySessionKey && (agentIdRaw || shouldScopeDefaultAgentKey)
-      ? opts.local === true
+      ? normalizedOpts.local === true
         ? await loadRuntimeConfig()
         : readGatewayDispatchConfig()
       : undefined;
   const sessionKey = scopeLegacySessionKeyToAgent({
     agentId: agentIdRaw,
-    sessionKey: opts.sessionKey,
+    sessionKey: normalizedOpts.sessionKey,
     mainKey: cfg?.session?.mainKey,
   });
-  if (sessionKey === opts.sessionKey) {
-    return opts;
+  if (sessionKey === normalizedOpts.sessionKey) {
+    return normalizedOpts;
   }
   return {
-    ...opts,
+    ...normalizedOpts,
     sessionKey,
   };
 }
