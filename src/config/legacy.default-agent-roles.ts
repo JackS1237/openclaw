@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 export type LegacyDefaultAgentRoleMaterialization = {
   config: OpenClawConfig;
   changes: string[];
+  warnings: Array<{ path: string; message: string }>;
 };
 
 function readVoiceCallPluginConfig(cfg: OpenClawConfig): Record<string, unknown> | undefined {
@@ -19,18 +20,32 @@ function readVoiceCallPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return isRecord(config) ? config : undefined;
 }
 
-/** True when an H2-era surface already declares any ambient agent ownership. */
-export function hasExplicitAmbientAgentOwnership(cfg: OpenClawConfig): boolean {
-  const bindings = Array.isArray(cfg.bindings)
-    ? cfg.bindings.filter((binding) => isRecord(binding) && binding.type !== "acp")
-    : [];
+/** True after Doctor has durably materialized the non-channel legacy owner set. */
+export function hasExplicitLegacyOwnershipBaseline(
+  cfg: OpenClawConfig,
+  legacyAgentId: string,
+): boolean {
+  const agentId = normalizeAgentId(legacyAgentId);
+  const entry = listAgentEntries(cfg).find(
+    (candidate) => normalizeAgentId(candidate.id) === agentId,
+  );
+  const heartbeat = cfg.agents?.defaults?.heartbeat;
+  const hasHeartbeatOwner =
+    heartbeat !== undefined ||
+    listAgentEntries(cfg).some((candidate) => Boolean(candidate.heartbeat));
+  const voiceCallEntry = cfg.plugins?.entries?.["voice-call"];
+  const voiceCallConfig = readVoiceCallPluginConfig(cfg);
+  const needsVoiceCallOwner =
+    voiceCallEntry?.enabled !== false &&
+    voiceCallConfig?.enabled === true &&
+    voiceCallConfig !== undefined;
   return (
-    bindings.length > 0 ||
-    Boolean(normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId)) ||
-    listAgentEntries(cfg).some((entry) => Boolean(entry.heartbeat)) ||
-    Boolean(normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId)) ||
-    Boolean(normalizeOptionalString(cfg.talk?.agentId)) ||
-    Boolean(normalizeOptionalString(readVoiceCallPluginConfig(cfg)?.agentId))
+    typeof entry?.workspace === "string" &&
+    entry.workspace.trim().length > 0 &&
+    hasHeartbeatOwner &&
+    Boolean(normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId)) &&
+    Boolean(normalizeOptionalString(cfg.talk?.agentId)) &&
+    (!needsVoiceCallOwner || Boolean(normalizeOptionalString(voiceCallConfig.agentId)))
   );
 }
 
@@ -105,6 +120,7 @@ export function materializeLegacyDefaultAgentRoles(
   const defaultAgentId = normalizeAgentId(legacyDefaultAgentId);
   let next = cfg;
   const changes: string[] = [];
+  const warnings: Array<{ path: string; message: string }> = [];
   const missingChannelBindings = listUnboundAmbientChannelIds(cfg, options.ambientChannelIds);
   if (options.materializeWorkspace) {
     const entries = { ...next.agents?.entries };
@@ -118,22 +134,27 @@ export function materializeLegacyDefaultAgentRoles(
         configuredWorkspace ??
         normalizeOptionalString(next.agents?.defaults?.workspace) ??
         resolveDefaultAgentWorkspaceDir(options.env);
-      if (!configuredWorkspace) {
+      // An authored-but-malformed value must survive until schema validation.
+      if (!Object.hasOwn(entry, "workspace")) {
         entries[entryKey!] = { ...entry, workspace };
         changes.push(
           `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
         );
+        warnings.push({
+          path: `agents.entries.${entryKey}.workspace`,
+          message: `legacy marker-free fleet temporarily keeps agent "${defaultAgentId}" in its sole-agent workspace; set agents.entries.${entryKey}.workspace explicitly or run "openclaw doctor --fix"`,
+        });
       }
-      const pluginPath = path.join(
-        resolveUserPath(workspace, options.env),
-        ".openclaw",
-        "extensions",
-      );
+      const pluginPath =
+        !Object.hasOwn(entry, "workspace") || configuredWorkspace
+          ? path.join(resolveUserPath(workspace, options.env), ".openclaw", "extensions")
+          : undefined;
       const rawPluginPaths = next.plugins?.load?.paths;
       const pluginPaths = Array.isArray(rawPluginPaths) ? rawPluginPaths : [];
       const canMaterializePluginPath =
         rawPluginPaths === undefined || Array.isArray(rawPluginPaths);
-      const preservePluginPath = canMaterializePluginPath && fs.existsSync(pluginPath);
+      const preservePluginPath =
+        pluginPath !== undefined && canMaterializePluginPath && fs.existsSync(pluginPath);
       next = {
         ...next,
         agents: { ...next.agents, entries },
@@ -151,7 +172,7 @@ export function materializeLegacyDefaultAgentRoles(
             }
           : {}),
       };
-      if (preservePluginPath) {
+      if (preservePluginPath && pluginPath) {
         changes.push(`Preserved workspace plugin discovery at "${pluginPath}".`);
       }
     }
@@ -170,6 +191,12 @@ export function materializeLegacyDefaultAgentRoles(
     changes.push(
       `Bound ${missingChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
     );
+    for (const channelId of missingChannelBindings) {
+      warnings.push({
+        path: `channels.${channelId}`,
+        message: `legacy marker-free fleet temporarily routes unmatched ${channelId} traffic to first roster agent "${defaultAgentId}"; run "openclaw agents bind --agent ${defaultAgentId} --bind ${channelId}:*" or "openclaw doctor --fix"`,
+      });
+    }
   }
 
   const rawDefaults = (cfg.agents as { defaults?: unknown } | undefined)?.defaults;
@@ -189,6 +216,10 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient heartbeat runs to agent "${defaultAgentId}".`);
+    warnings.push({
+      path: "agents.defaults.heartbeat.agentId",
+      message: `legacy marker-free fleet temporarily assigns ambient heartbeat runs to first roster agent "${defaultAgentId}"; set agents.defaults.heartbeat.agentId or run "openclaw doctor --fix"`,
+    });
   }
 
   const rawSystemAgent = defaultsConfig?.systemAgent;
@@ -212,6 +243,10 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient system-agent consults to agent "${defaultAgentId}".`);
+    warnings.push({
+      path: "agents.defaults.systemAgent.agentId",
+      message: `legacy marker-free fleet temporarily assigns system-agent consults to first roster agent "${defaultAgentId}"; set agents.defaults.systemAgent.agentId or run "openclaw doctor --fix"`,
+    });
   }
 
   const talkConfig = isRecord(cfg.talk) ? cfg.talk : undefined;
@@ -224,6 +259,10 @@ export function materializeLegacyDefaultAgentRoles(
       talk: { ...talkConfig, agentId: defaultAgentId },
     };
     changes.push(`Assigned ambient Talk sessions to agent "${defaultAgentId}".`);
+    warnings.push({
+      path: "talk.agentId",
+      message: `legacy marker-free fleet temporarily assigns Talk sessions to first roster agent "${defaultAgentId}"; set talk.agentId or run "openclaw doctor --fix"`,
+    });
   }
 
   const voiceCallEntry = cfg.plugins?.entries?.["voice-call"];
@@ -248,7 +287,11 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient voice-call sessions to agent "${defaultAgentId}".`);
+    warnings.push({
+      path: "plugins.entries.voice-call.config.agentId",
+      message: `legacy marker-free fleet temporarily assigns voice-call sessions to first roster agent "${defaultAgentId}"; set plugins.entries.voice-call.config.agentId or run "openclaw doctor --fix"`,
+    });
   }
 
-  return { config: next, changes };
+  return { config: next, changes, warnings };
 }

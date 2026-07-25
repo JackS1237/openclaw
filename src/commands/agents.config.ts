@@ -1,6 +1,4 @@
 // Agent config mutation and summary builders used by `openclaw agents` commands.
-import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -16,6 +14,7 @@ import {
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import { pinSoleAgentWorkspaceForFleetExpansion } from "../config/agent-workspace-ownership.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -164,21 +163,13 @@ export function applyAgentConfig(
   } else {
     if (nextList.length === 1 && !nextList[0]?.workspace?.trim()) {
       const soleAgent = nextList[0]!;
-      nextList[0] = {
-        ...soleAgent,
-        workspace: resolveAgentWorkspaceDir(cfg, soleAgent.id),
-      };
-      const pluginPath = path.join(nextList[0].workspace!, ".openclaw", "extensions");
-      const pluginPaths = cfg.plugins?.load?.paths ?? [];
-      if (fs.existsSync(pluginPath)) {
-        nextPlugins = {
-          ...cfg.plugins,
-          load: {
-            ...cfg.plugins?.load,
-            paths: pluginPaths.includes(pluginPath) ? pluginPaths : [...pluginPaths, pluginPath],
-          },
-        };
-      }
+      const pinned = pinSoleAgentWorkspaceForFleetExpansion({
+        sourceConfig: cfg,
+        targetConfig: cfg,
+        agentId: soleAgent.id,
+      });
+      nextList[0] = listAgentEntries(pinned.config)[0]!;
+      nextPlugins = pinned.config.plugins;
     }
     nextList.push(nextEntry);
   }

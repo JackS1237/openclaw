@@ -278,13 +278,21 @@ describe("persisted implicit-main roster migration", () => {
         'Assigned ambient Talk sessions to agent "writer".',
         "Removed retired agents.entries.*.default markers.",
       ],
+      retainedLegacyDefaultAgentId: "writer",
     });
   });
 
   it("preserves the first legacy list owner when no marker was authored", () => {
     const migrated = migratePersistedImplicitMainRoster({
-      agents: { list: [{ id: "10" }, { id: "2" }] },
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "10" },
+          systemAgent: { agentId: "10" },
+        },
+        list: [{ id: "10", workspace: "/srv/10" }, { id: "2" }],
+      },
       channels: { telegram: { enabled: true } },
+      talk: { agentId: "10" },
     });
     expect(migrated.config).toMatchObject({
       agents: {
@@ -297,6 +305,7 @@ describe("persisted implicit-main roster migration", () => {
       bindings: [{ agentId: "10", match: { channel: "telegram", accountId: "*" } }],
       talk: { agentId: "10" },
     });
+    expect(migrated.retainedLegacyDefaultAgentId).toBe("10");
   });
 
   it.each([
@@ -443,20 +452,67 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
-  it("keeps a marker-free fleet ownerless when any explicit ambient binding exists", () => {
+  it("materializes each missing marker-free surface despite a narrower peer binding", () => {
     const raw = {
       agents: { entries: { ops: {}, research: {} } },
-      bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "*" } }],
+      channels: { telegram: { enabled: true } },
+      bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "work" } }],
     };
 
     const migrated = migratePersistedImplicitMainRoster(raw);
 
-    expect(migrated).toEqual({ config: raw, changed: false, diagnostics: [] });
-    expect(tryGetLegacyDefaultAgentId(migrated.config as OpenClawConfig)).toBeUndefined();
+    expect(migrated.changed).toBe(true);
+    expect(migrated.config).toMatchObject({
+      agents: {
+        defaults: {
+          heartbeat: { agentId: "ops" },
+          systemAgent: { agentId: "ops" },
+        },
+        entries: { ops: { workspace: expect.any(String) }, research: {} },
+      },
+      bindings: [
+        { agentId: "research", match: { channel: "telegram", accountId: "work" } },
+        { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+      ],
+      talk: { agentId: "ops" },
+    });
+    expect(tryGetLegacyDefaultAgentId(migrated.config as OpenClawConfig)).toBe("ops");
+
+    const validation = validateConfigObjectWithPlugins(raw, {
+      pluginValidation: "skip",
+      env: { HOME: "/tmp/openclaw-marker-free-validation" } as NodeJS.ProcessEnv,
+    });
+    expect(validation.ok).toBe(true);
+    expect(validation.warnings.map((warning) => warning.path)).toEqual([
+      "agents.entries.ops.workspace",
+      "channels.telegram",
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
+  });
+
+  it("preserves malformed explicit ownership values for schema rejection", () => {
+    const raw = {
+      agents: {
+        defaults: { heartbeat: { agentId: 42 } },
+        entries: { ops: { workspace: 42 }, research: {} },
+      },
+    };
+
+    const migrated = migratePersistedImplicitMainRoster(raw);
     expect(
-      (migrated.config as { agents?: { defaults?: unknown } }).agents?.defaults,
-    ).toBeUndefined();
-    expect((migrated.config as { talk?: unknown }).talk).toBeUndefined();
+      (migrated.config as { agents?: { entries?: { ops?: { workspace?: unknown } } } }).agents
+        ?.entries?.ops?.workspace,
+    ).toBe(42);
+    expect(
+      (
+        migrated.config as {
+          agents?: { defaults?: { heartbeat?: { agentId?: unknown } } };
+        }
+      ).agents?.defaults?.heartbeat?.agentId,
+    ).toBe(42);
+    expect(validateConfigObjectRaw(migrated.config).ok).toBe(false);
   });
 
   it.each([

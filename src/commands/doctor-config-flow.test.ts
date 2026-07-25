@@ -1715,7 +1715,7 @@ describe("doctor config flow", () => {
           heartbeat: { agentId: "ops" },
           systemAgent: { agentId: "ops" },
         },
-        entries: { ops: {}, research: {} },
+        entries: { ops: { workspace: "/srv/ops" }, research: {} },
       },
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
       channels: { telegram: { enabled: true } },

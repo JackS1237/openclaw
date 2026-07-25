@@ -367,11 +367,11 @@ async function normalizeSessionKeyOptsForDispatch(
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
-    return {
-      ...opts,
-      to: undefined,
-      sessionKey: rawTo,
-    };
+    return normalizeSessionKeyOptsForDispatch(
+      { ...opts, to: undefined, sessionKey: rawTo },
+      runtime,
+      deps,
+    );
   }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";

@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { tryGetLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
+import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
 import { CronService } from "../../../cron/service.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, saveCronJobsStore } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
@@ -82,6 +84,44 @@ describe("legacy default cron ownership", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledWith(
         expect.objectContaining({ job: expect.objectContaining({ agentId: "ops" }) }),
       );
+      expect(
+        (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0]?.agentId,
+      ).toBe("ops");
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("keeps first-entry cron ownership for a marker-free fleet with a peer binding", async () => {
+    const root = tempDirs.make("openclaw-cron-marker-free-owner-");
+    const storePath = path.join(root, "cron.sqlite");
+    await saveCronJobsStore(storePath, { version: 1, jobs: [legacyJob("ownerless")] });
+    const validated = validateConfigObjectWithPlugins(
+      {
+        agents: { entries: { ops: {}, research: {} } },
+        channels: { telegram: { enabled: true } },
+        bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "work" } }],
+      },
+      { pluginValidation: "skip", env: { HOME: root } as NodeJS.ProcessEnv },
+    );
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(validated.config);
+    expect(legacyDefaultAgentId).toBe("ops");
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await cron.start();
       expect(
         (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0]?.agentId,
       ).toBe("ops");

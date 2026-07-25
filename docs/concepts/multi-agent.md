@@ -242,7 +242,7 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
 - A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-For existing multi-agent configs, `openclaw doctor --fix` materializes a retired `default: true` marker into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets, then removes the marker. A sole agent needs no marker and resolves trivially.
+For existing multi-agent configs, `openclaw doctor --fix` materializes a retired `default: true` marker into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets, then removes the marker. Older marker-free rosters used the first entry as a fallback even when they also contained narrower peer bindings, so OpenClaw temporarily materializes that first-entry owner independently for each still-unowned ambient surface and warns with the explicit setting to persist. After Doctor writes those owners, newly added surfaces are genuinely ownerless and fail closed until you add their binding or target. A sole agent needs no marker and resolves trivially.
 
 ## Multiple accounts / phone numbers
 

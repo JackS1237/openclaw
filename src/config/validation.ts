@@ -27,7 +27,10 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import {
-  retainLegacyDefaultAgentId,
+  appendProvisionalLegacyOwnershipWarnings,
+  finalizeProvisionalLegacyDefaultAgent,
+  inheritLegacyDefaultAgentId,
+  listLegacyOwnershipWarnings,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
@@ -128,13 +131,28 @@ function materializeLegacyActiveChannelOwners(
   if (!legacyDefaultAgentId) {
     return result;
   }
+  // Zod returns a fresh object, so carry the non-schema migration state across
+  // validation before active-channel discovery decides whether it is durable.
+  const validatedConfig = inheritLegacyDefaultAgentId(migrated, result.config);
+  const config = materializeLegacyAgentOwnershipForActiveChannels(
+    validatedConfig,
+    legacyDefaultAgentId,
+    env,
+  );
+  finalizeProvisionalLegacyDefaultAgent(config);
+  const warnings = [...result.warnings, ...listLegacyOwnershipWarnings(config)];
+  const seenWarnings = new Set<string>();
   return {
     ...result,
-    config: materializeLegacyAgentOwnershipForActiveChannels(
-      result.config,
-      legacyDefaultAgentId,
-      env,
-    ),
+    config,
+    warnings: warnings.filter((warning) => {
+      const key = `${warning.path}\0${warning.message}`;
+      if (seenWarnings.has(key)) {
+        return false;
+      }
+      seenWarnings.add(key);
+      return true;
+    }),
   };
 }
 
@@ -160,9 +178,10 @@ export function materializeLegacyAgentOwnershipForActiveChannels(
     .map((entry) => entry.channelId);
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
-  }).config;
-  retainLegacyDefaultAgentId(materialized, legacyDefaultAgentId);
-  return materialized;
+  });
+  const next = inheritLegacyDefaultAgentId(config, materialized.config);
+  appendProvisionalLegacyOwnershipWarnings(next, materialized.warnings);
+  return next;
 }
 
 function validateConfigObjectWithPluginsBase(

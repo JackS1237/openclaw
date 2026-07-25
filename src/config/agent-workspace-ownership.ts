@@ -1,0 +1,60 @@
+import fs from "node:fs";
+import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+
+export type AgentWorkspaceOwnershipPin = {
+  config: OpenClawConfig;
+  workspace?: string;
+  pluginPath?: string;
+};
+
+/** Pins a sole agent's resolved workspace before a write expands the roster. */
+export function pinSoleAgentWorkspaceForFleetExpansion(params: {
+  sourceConfig: OpenClawConfig;
+  targetConfig: OpenClawConfig;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}): AgentWorkspaceOwnershipPin {
+  const agentId = normalizeAgentId(params.agentId);
+  const entries = { ...params.targetConfig.agents?.entries };
+  const entryKey = Object.keys(entries).find(
+    (candidate) => normalizeAgentId(candidate) === agentId,
+  );
+  const entry = entryKey ? entries[entryKey] : undefined;
+  if (!entry || Object.hasOwn(entry, "workspace")) {
+    return { config: params.targetConfig };
+  }
+
+  // Resolve against the old sole-agent topology. Resolving after the roster
+  // expands would silently select the new per-agent workspace instead.
+  const workspace = resolveAgentWorkspaceDir(params.sourceConfig, agentId, params.env);
+  entries[entryKey!] = { ...entry, workspace };
+  const pluginPath = path.join(workspace, ".openclaw", "extensions");
+  const rawPluginPaths = params.targetConfig.plugins?.load?.paths;
+  const pluginPaths = Array.isArray(rawPluginPaths) ? rawPluginPaths : [];
+  const preservePluginPath =
+    (rawPluginPaths === undefined || Array.isArray(rawPluginPaths)) && fs.existsSync(pluginPath);
+  return {
+    config: {
+      ...params.targetConfig,
+      agents: { ...params.targetConfig.agents, entries },
+      ...(preservePluginPath
+        ? {
+            plugins: {
+              ...params.targetConfig.plugins,
+              load: {
+                ...params.targetConfig.plugins?.load,
+                paths: pluginPaths.includes(pluginPath)
+                  ? pluginPaths
+                  : [...pluginPaths, pluginPath],
+              },
+            },
+          }
+        : {}),
+    },
+    workspace,
+    ...(preservePluginPath ? { pluginPath } : {}),
+  };
+}

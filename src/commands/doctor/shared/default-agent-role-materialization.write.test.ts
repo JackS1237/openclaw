@@ -136,6 +136,9 @@ describe("default role materialization authored writes", () => {
         OPENCLAW_TEST_FAST: "1",
       } as NodeJS.ProcessEnv;
       const storePath = resolveCronJobsStorePath(undefined, env);
+      const soleWorkspace = path.join(root, ".openclaw", "workspace");
+      const workspacePluginPath = path.join(soleWorkspace, ".openclaw", "extensions");
+      await fs.mkdir(workspacePluginPath, { recursive: true });
       await fs.writeFile(
         configPath,
         `${JSON.stringify({
@@ -205,13 +208,18 @@ describe("default role materialization authored writes", () => {
               model?: { primary?: string };
               systemAgent?: { agentId?: string };
             };
-            entries?: Record<string, { default?: boolean }>;
+            entries?: Record<string, { default?: boolean; workspace?: string }>;
           };
           bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
-          plugins?: { entries?: Record<string, { config?: Record<string, unknown> }> };
+          plugins?: {
+            load?: { paths?: string[] };
+            entries?: Record<string, { config?: Record<string, unknown> }>;
+          };
           talk?: { agentId?: string };
         };
         expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+        expect(persisted.agents?.entries?.ops?.workspace).toBe(soleWorkspace);
+        expect(persisted.plugins?.load?.paths).toContain(workspacePluginPath);
         expect(persisted.bindings).toContainEqual({
           agentId: "ops",
           match: { channel: "discord", accountId: "*" },
@@ -227,6 +235,56 @@ describe("default role materialization authored writes", () => {
       });
     },
   );
+
+  it("persists per-surface first-entry ownership and clears migration warnings", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marker-free-roles-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const raw = {
+      agents: { entries: { ops: {}, research: {} } },
+      channels: { telegram: { enabled: true } },
+      bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "work" } }],
+    };
+    await fs.writeFile(configPath, `${JSON.stringify(raw)}\n`, "utf-8");
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "agents.entries.ops.workspace",
+        "channels.telegram",
+        "agents.defaults.heartbeat.agentId",
+        "agents.defaults.systemAgent.agentId",
+        "talk.agentId",
+      ]),
+    );
+    await io.writeConfigFile(snapshot.config, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"]],
+      explicitSetValueSource: snapshot.config,
+    });
+
+    resetConfigRuntimeState();
+    const reread = await io.readConfigFileSnapshot();
+    expect(reread.warnings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("marker-free fleet") }),
+      ]),
+    );
+    expect(reread.config.bindings).toContainEqual({
+      agentId: "ops",
+      match: { channel: "telegram", accountId: "*" },
+    });
+    expect(reread.config.agents?.entries?.ops?.workspace).toBe(
+      path.join(root, ".openclaw", "workspace"),
+    );
+  });
 
   it("does not hand ownership to a previous sole agent removed by the fleet write", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replaced-sole-owner-"));

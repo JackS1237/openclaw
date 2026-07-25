@@ -8,6 +8,7 @@ import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { pinSoleAgentWorkspaceForFleetExpansion } from "./agent-workspace-ownership.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -75,7 +76,7 @@ import {
 } from "./io.write-safety.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { tryResolveLegacyDefaultAgentId } from "./legacy.roster.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
@@ -158,7 +159,9 @@ export async function writeConfigFileFromContext(
   // writes have one equally unambiguous previous owner. cron.store is also
   // raw-only, so the snapshot remains authoritative until this handoff commits.
   const retainedLegacyDefaultAgentId = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
-    .map((source) => tryResolveLegacyDefaultAgentId(source))
+    .map(
+      (source) => migratePersistedImplicitMainRoster(source, deps.env).retainedLegacyDefaultAgentId,
+    )
     .find((agentId) => agentId !== undefined);
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const nextAgentEntries = listAgentEntries(nextConfig);
@@ -167,6 +170,15 @@ export async function writeConfigFileFromContext(
     previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
   const crossesIntoMultiAgent =
     previousSoleAgentId !== undefined && previousSoleRemains && nextAgentEntries.length > 1;
+  const workspacePin = crossesIntoMultiAgent
+    ? pinSoleAgentWorkspaceForFleetExpansion({
+        sourceConfig: snapshot.config,
+        targetConfig: nextConfig,
+        agentId: previousSoleAgentId,
+        env: deps.env,
+      })
+    : { config: nextConfig };
+  nextConfig = workspacePin.config;
   if (crossesIntoMultiAgent) {
     nextConfig = materializeLegacyAgentOwnershipForActiveChannels(
       nextConfig,
@@ -176,6 +188,10 @@ export async function writeConfigFileFromContext(
   }
   const topologyOwnershipPaths: string[][] = crossesIntoMultiAgent
     ? [
+        ...(workspacePin.workspace
+          ? [["agents", "entries", normalizeAgentId(previousSoleAgentId), "workspace"]]
+          : []),
+        ...(workspacePin.pluginPath ? [["plugins", "load", "paths"]] : []),
         ...(Array.isArray(nextConfig.bindings) ? [["bindings"]] : []),
         ...(nextConfig.agents?.defaults?.heartbeat?.agentId
           ? [["agents", "defaults", "heartbeat", "agentId"]]

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { tryGetLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -87,17 +88,21 @@ describe("explicit ambient agent targets", () => {
 });
 
 describe("multi-agent ambient ownership warnings", () => {
-  it("warns for every ownerless ambient surface without invalidating config", () => {
+  it("warns for every first-entry surface materialized from a marker-free fleet", () => {
     const result = validateConfigObjectWithPlugins(
       {
         agents: { entries: { ops: {}, research: {} } },
         bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "work" } }],
         channels: { telegram: { enabled: true } },
       },
-      { pluginValidation: "skip" },
+      {
+        pluginValidation: "skip",
+        env: { HOME: "/tmp/openclaw-agent-ownership-warning" } as NodeJS.ProcessEnv,
+      },
     );
     expect(result.ok).toBe(true);
     expect(result.warnings.map((warning) => warning.path)).toEqual([
+      "agents.entries.ops.workspace",
       "channels.telegram",
       "agents.defaults.heartbeat.agentId",
       "agents.defaults.systemAgent.agentId",
@@ -114,16 +119,57 @@ describe("multi-agent ambient ownership warnings", () => {
             heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
           },
-          entries: { ops: {}, research: {} },
+          entries: { ops: { workspace: "/srv/ops" }, research: {} },
         },
         channels: { telegram: { enabled: true } },
         bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
         talk: { agentId: "ops" },
       },
     ]) {
-      const result = validateConfigObjectWithPlugins(config, { pluginValidation: "skip" });
+      const result = validateConfigObjectWithPlugins(config, {
+        pluginValidation: "skip",
+        env: { HOME: "/tmp/openclaw-explicit-agent-ownership" } as NodeJS.ProcessEnv,
+      });
       expect(result.ok).toBe(true);
       expect(result.warnings).toEqual([]);
+      if (result.ok && Object.keys(config.agents.entries).length > 1) {
+        expect(tryGetLegacyDefaultAgentId(result.config)).toBeUndefined();
+      }
+    }
+  });
+
+  it("leaves a channel added after baseline materialization genuinely ownerless", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            heartbeat: { agentId: "ops" },
+            systemAgent: { agentId: "ops" },
+          },
+          entries: { ops: { workspace: "/srv/ops" }, research: {} },
+        },
+        channels: { telegram: { enabled: true }, discord: { enabled: true } },
+        bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+        talk: { agentId: "ops" },
+      },
+      {
+        pluginValidation: "skip",
+        env: { HOME: "/tmp/openclaw-post-materialization-channel" } as NodeJS.ProcessEnv,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.discord",
+        message: expect.stringContaining("has no channel-wide owner"),
+      }),
+    );
+    if (result.ok) {
+      expect(result.config.bindings).not.toContainEqual(
+        expect.objectContaining({ match: expect.objectContaining({ channel: "discord" }) }),
+      );
+      expect(tryGetLegacyDefaultAgentId(result.config)).toBeUndefined();
     }
   });
 });
