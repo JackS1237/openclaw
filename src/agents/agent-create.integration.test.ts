@@ -89,7 +89,7 @@ describe("agent roster persistence", () => {
     });
   });
 
-  it("preserves a legacy list byte-for-byte during a non-roster mutation", async () => {
+  it("retires a legacy default marker during an unrelated config write", async () => {
     const state = await createOpenClawTestState({
       layout: "state-only",
       scenario: "empty",
@@ -108,8 +108,12 @@ describe("agent roster persistence", () => {
       });
 
       const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
-      expect(persisted.agents).not.toHaveProperty("entries");
+      expect(persisted.agents).not.toHaveProperty("list");
+      expect(persisted.agents?.entries).toMatchObject({
+        main: { workspace: expect.any(String) },
+        ops: { workspace: "/srv/ops" },
+      });
+      expect(persisted.agents?.entries?.main).not.toHaveProperty("default");
       expect(persisted.gateway?.port).toBe(19001);
     } finally {
       closeOpenClawStateDatabaseForTest();
