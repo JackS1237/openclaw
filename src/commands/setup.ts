@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
+  resolveAgentWorkspaceDir,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -173,7 +174,8 @@ export async function setupCommand(
   });
   const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
-  const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
+  const configuredWorkspace =
+    defaultEntryWorkspace || resolveAgentWorkspaceDir(resolvedConfig, setupAgentId);
 
   const workspace =
     desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
@@ -201,7 +203,11 @@ export async function setupCommand(
   if (shouldWriteWorkspace) {
     if (!writeInheritedWorkspaceOverride) {
       const roster = structuredClone(listAgentEntries(next));
-      if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
+      if (
+        !snapshot.exists ||
+        Boolean(defaultEntryWorkspace) ||
+        (desiredWorkspace !== undefined && !writeInheritedWorkspaceOverride)
+      ) {
         for (const entry of roster) {
           if (entry.id === setupAgentId) {
             // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.

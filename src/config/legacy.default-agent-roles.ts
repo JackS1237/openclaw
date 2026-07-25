@@ -5,7 +5,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { isRecord } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import type { AgentRouteBinding } from "./types.agents.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -76,20 +76,32 @@ export function materializeLegacyDefaultAgentRoles(
       (candidate) => normalizeAgentId(candidate) === defaultAgentId,
     );
     const entry = entryKey ? entries[entryKey] : undefined;
-    if (entry && !normalizeOptionalString(entry.workspace)) {
+    if (entry) {
+      const configuredWorkspace = normalizeOptionalString(entry.workspace);
       const workspace =
+        configuredWorkspace ??
         normalizeOptionalString(next.agents?.defaults?.workspace) ??
         resolveDefaultAgentWorkspaceDir(options.env);
-      entries[entryKey!] = {
-        ...entry,
-        workspace,
-      };
-      const pluginPath = path.join(workspace, ".openclaw", "extensions");
-      const pluginPaths = next.plugins?.load?.paths ?? [];
+      if (!configuredWorkspace) {
+        entries[entryKey!] = { ...entry, workspace };
+        changes.push(
+          `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
+        );
+      }
+      const pluginPath = path.join(
+        resolveUserPath(workspace, options.env),
+        ".openclaw",
+        "extensions",
+      );
+      const rawPluginPaths = next.plugins?.load?.paths;
+      const pluginPaths = Array.isArray(rawPluginPaths) ? rawPluginPaths : [];
+      const canMaterializePluginPath =
+        rawPluginPaths === undefined || Array.isArray(rawPluginPaths);
+      const preservePluginPath = canMaterializePluginPath && fs.existsSync(pluginPath);
       next = {
         ...next,
         agents: { ...next.agents, entries },
-        ...(fs.existsSync(pluginPath)
+        ...(preservePluginPath
           ? {
               plugins: {
                 ...next.plugins,
@@ -103,10 +115,7 @@ export function materializeLegacyDefaultAgentRoles(
             }
           : {}),
       };
-      changes.push(
-        `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
-      );
-      if (fs.existsSync(pluginPath)) {
+      if (preservePluginPath) {
         changes.push(`Preserved workspace plugin discovery at "${pluginPath}".`);
       }
     }

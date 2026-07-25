@@ -62,7 +62,11 @@ describe("default role materialization authored writes", () => {
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.config.agents?.entries?.ops).not.toHaveProperty("default");
     expect(snapshot.config.agents?.defaults?.heartbeat?.agentId).toBe("ops");
-    await io.writeConfigFile(snapshot.config, { baseSnapshot: snapshot });
+    await io.writeConfigFile(snapshot.config, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"]],
+      explicitSetValueSource: snapshot.config,
+    });
 
     const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
       agents?: {
