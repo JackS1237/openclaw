@@ -54,8 +54,7 @@ export async function resolveCliAgentId(params: {
     return soleAgentId;
   }
   const flagName = params.flagName ?? "--agent <id>";
-  const interactive =
-    params.deps?.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const interactive = params.deps?.interactive ?? (process.stdin.isTTY && process.stdout.isTTY);
   if (!interactive) {
     throw new AgentSelectionRequiredError(agentIds, {
       surface: params.surface,

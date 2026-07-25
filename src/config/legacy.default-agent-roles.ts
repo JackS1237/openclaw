@@ -69,7 +69,7 @@ export function materializeLegacyDefaultAgentRoles(
   const changes: string[] = [];
   const missingChannelBindings = listUnboundAmbientChannelIds(cfg);
   if (options.materializeWorkspace) {
-    const entries = { ...(next.agents?.entries ?? {}) };
+    const entries = { ...next.agents?.entries };
     const entryKey = Object.keys(entries).find(
       (candidate) => normalizeAgentId(candidate) === defaultAgentId,
     );

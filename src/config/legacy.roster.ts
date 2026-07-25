@@ -176,8 +176,8 @@ export function migratePersistedImplicitMainRoster(
     return { config: changed ? { ...root, agents } : raw, changed, diagnostics };
   }
 
-  const defaultIds = validIds.filter(
-    (id) => (roster[id] as Record<string, unknown>).default === true,
+  const defaultIds = new Set(
+    validIds.filter((id) => (roster[id] as Record<string, unknown>).default === true),
   );
   const hasBooleanMarker = validIds.some((id) =>
     Object.hasOwn(roster[id] as Record<string, unknown>, "default"),
@@ -186,10 +186,10 @@ export function migratePersistedImplicitMainRoster(
   // false-only marker sets to the first valid entry. Preserve that owner before
   // retiring the field so upgrades do not silently reroute ambient work.
   const orderedValidIds = legacyListOrder ?? validIds;
-  const orderedDefaultIds = orderedValidIds.filter((id) => defaultIds.includes(id));
+  const orderedDefaultId = orderedValidIds.find((id) => defaultIds.has(id));
   const legacyDefaultAgentId =
     rawLegacyDefaultAgentId ??
-    orderedDefaultIds[0] ??
+    orderedDefaultId ??
     (legacyListOrder || hasBooleanMarker ? orderedValidIds[0] : undefined);
   let nextRoot: Record<string, unknown> = { ...root, agents };
   if (Object.keys(roster).length > 1 && legacyDefaultAgentId) {
