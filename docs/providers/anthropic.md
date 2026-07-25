@@ -456,10 +456,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
             },
           },
         },
-        list: [
-          { id: "research", default: true },
-          { id: "alerts", params: { cacheRetention: "none" } },
-        ],
+        entries: {
+          research: {},
+          alerts: { params: { cacheRetention: "none" } },
+        },
       },
     }
     ```

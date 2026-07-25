@@ -160,12 +160,11 @@ agents:
       "anthropic/claude-opus-4-6":
         params:
           cacheRetention: "long"
-  list:
-    - id: "research"
-      default: true
+  entries:
+    research:
       heartbeat:
         every: "55m"
-    - id: "alerts"
+    alerts:
       params:
         cacheRetention: "none"
 ```

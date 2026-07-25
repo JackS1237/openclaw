@@ -275,7 +275,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     entries: {
       main: {
-        default: true,
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -487,7 +486,7 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
       skills: ["github", "weather"],
     },
     entries: {
-      main: { default: true },
+      main: {},
       docs: { workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
     },
   },

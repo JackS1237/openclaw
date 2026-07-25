@@ -463,10 +463,10 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
-        list: [
-          { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-          { id: "work", workspace: "~/.openclaw/workspace-work" },
-        ],
+        entries: {
+          home: { workspace: "~/.openclaw/workspace-home" },
+          work: { workspace: "~/.openclaw/workspace-work" },
+        },
       },
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },

@@ -24,8 +24,9 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace` (o
 ```
 
 An explicit `agents.defaults.workspace` value takes precedence over
-`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
-at a mounted workspace when you do not want to write that path into config.
+`OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent
+fleet, agents without their own `workspace` use an agent-id subdirectory so no
+implicit owner claims the shared root.
 
 ### `agents.defaults.repoRoot`
 
@@ -588,7 +589,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, OpenClaw preserves configured-default routing.
+Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, a sole configured agent resolves implicitly; ambient consults in a multi-agent fleet fail with an actionable error.
 
 ### `agents.defaults.compaction`
 
@@ -981,10 +982,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
@@ -1025,13 +1024,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- The `agents.entries` object key is the stable agent id.
+- `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1062,15 +1061,20 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    defaults: {
+      heartbeat: { agentId: "home" },
+      systemAgent: { agentId: "home" },
+    },
+    entries: {
+      home: { workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
     { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
   ],
+  talk: { agentId: "home" },
 }
 ```
 
