@@ -173,7 +173,9 @@ describe("createAgent", () => {
       entry: { id: "researcher", name: "Researcher", default: false },
     });
 
-    expect(mocks.persisted.agents?.entries?.researcher).not.toHaveProperty("default");
+    expect(
+      (mocks.persisted.agents as { entries?: Record<string, unknown> })?.entries?.researcher,
+    ).not.toHaveProperty("default");
   });
 
   it.each([
@@ -305,7 +307,9 @@ describe("createAgent", () => {
     await expect(
       createAgent({ entry: { id: "researcher", name: "Researcher", default: true } }),
     ).resolves.toMatchObject({ status: "created", agentId: "researcher" });
-    expect(mocks.persisted.agents?.entries?.researcher).not.toHaveProperty("default");
+    expect(
+      (mocks.persisted.agents as { entries?: Record<string, unknown> })?.entries?.researcher,
+    ).not.toHaveProperty("default");
   });
 
   it("rejects a concurrent non-main roster during main bootstrap", async () => {

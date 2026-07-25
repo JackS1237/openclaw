@@ -38,7 +38,7 @@ describe("legacy default cron ownership", () => {
     });
 
     const first = await materializeLegacyDefaultCronJobOwners({
-      cfg: { cron: { store: storePath } },
+      cfg: { cron: { store: storePath } as never },
       legacyDefaultAgentId: "ops",
     });
     expect(first.changes).toHaveLength(1);
@@ -51,7 +51,7 @@ describe("legacy default cron ownership", () => {
 
     await expect(
       materializeLegacyDefaultCronJobOwners({
-        cfg: { cron: { store: storePath } },
+        cfg: { cron: { store: storePath } as never },
         legacyDefaultAgentId: "ops",
       }),
     ).resolves.toMatchObject({ changes: [] });
