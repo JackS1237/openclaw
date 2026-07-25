@@ -1,4 +1,6 @@
 // Agent config mutation and summary builders used by `openclaw agents` commands.
+import fs from "node:fs";
+import path from "node:path";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -156,6 +158,7 @@ export function applyAgentConfig(
     nextEntry.model = params.model;
   }
   const nextList = [...list];
+  let nextPlugins = cfg.plugins;
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
@@ -165,12 +168,24 @@ export function applyAgentConfig(
         ...soleAgent,
         workspace: resolveAgentWorkspaceDir(cfg, soleAgent.id),
       };
+      const pluginPath = path.join(nextList[0].workspace!, ".openclaw", "extensions");
+      const pluginPaths = cfg.plugins?.load?.paths ?? [];
+      if (fs.existsSync(pluginPath)) {
+        nextPlugins = {
+          ...cfg.plugins,
+          load: {
+            ...cfg.plugins?.load,
+            paths: pluginPaths.includes(pluginPath) ? pluginPaths : [...pluginPaths, pluginPath],
+          },
+        };
+      }
     }
     nextList.push(nextEntry);
   }
   const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
   return {
     ...cfg,
+    ...(nextPlugins ? { plugins: nextPlugins } : {}),
     agents: {
       ...agentsConfig,
       entries: toAgentEntriesRecord(nextList),

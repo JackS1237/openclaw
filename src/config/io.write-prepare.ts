@@ -944,6 +944,7 @@ function shouldPersistCanonicalAgentRoster(params: {
   sourceConfig: unknown;
   sourceConfigBeforeMigrations?: unknown;
   nextConfig: unknown;
+  agentRosterIncludeOwned?: boolean;
   explicitSetPaths?: readonly (readonly string[])[];
   unsetPaths?: readonly (readonly string[])[];
 }): boolean {
@@ -951,11 +952,12 @@ function shouldPersistCanonicalAgentRoster(params: {
     return false;
   }
   const preMigrationRoster = readAgentRosterProperty(params.sourceConfigBeforeMigrations);
-  if (preMigrationRoster?.kind === "list") {
+  if (preMigrationRoster?.kind === "list" && params.agentRosterIncludeOwned !== true) {
     return true;
   }
   if (
     preMigrationRoster?.kind === "entries" &&
+    params.agentRosterIncludeOwned !== true &&
     isRecord(preMigrationRoster.value) &&
     Object.values(preMigrationRoster.value).some(
       (entry) => isRecord(entry) && typeof entry.default === "boolean",

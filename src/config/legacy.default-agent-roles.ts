@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -75,16 +77,38 @@ export function materializeLegacyDefaultAgentRoles(
     );
     const entry = entryKey ? entries[entryKey] : undefined;
     if (entry && !normalizeOptionalString(entry.workspace)) {
+      const workspace =
+        normalizeOptionalString(next.agents?.defaults?.workspace) ??
+        resolveDefaultAgentWorkspaceDir(options.env);
       entries[entryKey!] = {
         ...entry,
-        workspace:
-          normalizeOptionalString(next.agents?.defaults?.workspace) ??
-          resolveDefaultAgentWorkspaceDir(options.env),
+        workspace,
       };
-      next = { ...next, agents: { ...next.agents, entries } };
+      const pluginPath = path.join(workspace, ".openclaw", "extensions");
+      const pluginPaths = next.plugins?.load?.paths ?? [];
+      next = {
+        ...next,
+        agents: { ...next.agents, entries },
+        ...(fs.existsSync(pluginPath)
+          ? {
+              plugins: {
+                ...next.plugins,
+                load: {
+                  ...next.plugins?.load,
+                  paths: pluginPaths.includes(pluginPath)
+                    ? pluginPaths
+                    : [...pluginPaths, pluginPath],
+                },
+              },
+            }
+          : {}),
+      };
       changes.push(
         `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
       );
+      if (fs.existsSync(pluginPath)) {
+        changes.push(`Preserved workspace plugin discovery at "${pluginPath}".`);
+      }
     }
   }
   if (missingChannelBindings.length > 0) {

@@ -8,7 +8,6 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
-  resolveDefaultAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -24,6 +23,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
+import { resolveCliAgentId } from "./agent-selection.js";
 
 type ConfigIO = {
   configPath: string;
@@ -134,7 +134,7 @@ async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<str
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string },
+  opts?: { workspace?: string; agent?: string },
   runtime: RuntimeEnv = defaultRuntime,
   deps: SetupCommandDeps = {},
 ) {
@@ -165,9 +165,11 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const setupAgentId = resolveDefaultAgentId(resolvedConfig, {
+  const setupAgentId = await resolveCliAgentId({
+    cfg: resolvedConfig,
+    runtime,
+    agentInput: opts?.agent,
     surface: "setup workspace selection",
-    hint: "Run setup for a sole-agent config or select the target agent in onboarding.",
   });
   const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
@@ -283,10 +285,9 @@ export async function setupCommand(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(defaultAgentId);
+  )(setupAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");

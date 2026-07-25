@@ -78,7 +78,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
-          entries: { main: { default: true, workspace } },
+          entries: { main: { workspace } },
         },
         gateway: {
           mode: "local",
@@ -368,7 +368,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.entries).toEqual({ main: { default: true } });
+      expect(config.agents?.entries).toEqual({ main: {} });
     });
   });
 

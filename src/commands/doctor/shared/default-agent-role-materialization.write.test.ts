@@ -19,6 +19,14 @@ describe("default role materialization authored writes", () => {
     const channelsPath = path.join(root, "channels.json5");
     const includeRaw = `${JSON.stringify({ telegram: { enabled: true } }, null, 2)}\n`;
     await fs.writeFile(channelsPath, includeRaw, "utf-8");
+    const workspacePluginPath = path.join(
+      root,
+      ".openclaw",
+      "workspace",
+      ".openclaw",
+      "extensions",
+    );
+    await fs.mkdir(workspacePluginPath, { recursive: true });
     await fs.writeFile(
       configPath,
       `${JSON.stringify(
@@ -64,6 +72,7 @@ describe("default role materialization authored writes", () => {
       channels?: { $include?: string };
       bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
       talk?: { agentId?: string };
+      plugins?: { load?: { paths?: string[] } };
     };
     expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
@@ -79,6 +88,7 @@ describe("default role materialization authored writes", () => {
     });
     expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
+    expect(persisted.plugins?.load?.paths).toContain(workspacePluginPath);
 
     const firstPersisted = await fs.readFile(configPath, "utf-8");
     const reread = await io.readConfigFileSnapshot();
