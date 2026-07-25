@@ -1,11 +1,13 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { materializeLegacyDefaultCronJobOwners } from "../cron/legacy-default-agent-owner-migration.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -78,10 +80,39 @@ import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js
 import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
-import { validateConfigObjectRawWithPlugins } from "./validation.js";
+import {
+  materializeLegacyAgentOwnershipForActiveChannels,
+  validateConfigObjectRawWithPlugins,
+} from "./validation.js";
 
 function hasOwnIncludeDirective(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && Object.hasOwn(value, INCLUDE_KEY);
+}
+
+function readConfigPath(value: unknown, segments: readonly string[]): unknown {
+  let current = value;
+  for (const segment of segments) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function setConfigPath(value: unknown, segments: readonly string[], nextValue: unknown): unknown {
+  if (segments.length === 0) {
+    return structuredClone(nextValue);
+  }
+  const [head, ...tail] = segments;
+  if (!head) {
+    return value;
+  }
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    ...record,
+    [head]: setConfigPath((record as Record<string, unknown>)[head], tail, nextValue),
+  };
 }
 
 function hasIncludedGatewayModeOwner(value: unknown): boolean {
@@ -111,7 +142,8 @@ export async function writeConfigFileFromContext(
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
-  let persistCandidate: unknown = cfg;
+  let nextConfig = cfg;
+  let persistCandidate: unknown;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -122,16 +154,52 @@ export async function writeConfigFileFromContext(
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
-  // Both retired fields are raw-input-only: canonical next config cannot
-  // reassign agents.*.default or cron.store, so the pre-migration snapshot is
-  // the authoritative owner and store until this durable handoff completes.
-  const legacyDefaultAgentId = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
+  // Retired marker ownership comes from raw input; markerless sole-to-fleet
+  // writes have one equally unambiguous previous owner. cron.store is also
+  // raw-only, so the snapshot remains authoritative until this handoff commits.
+  const retainedLegacyDefaultAgentId = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
     .map((source) => tryResolveLegacyDefaultAgentId(source))
     .find((agentId) => agentId !== undefined);
-  if (legacyDefaultAgentId) {
+  const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
+  const nextAgentEntries = listAgentEntries(nextConfig);
+  const nextAgentIds = new Set(nextAgentEntries.map((entry) => normalizeAgentId(entry.id)));
+  const previousSoleRemains =
+    previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
+  const crossesIntoMultiAgent =
+    previousSoleAgentId !== undefined && previousSoleRemains && nextAgentEntries.length > 1;
+  if (crossesIntoMultiAgent) {
+    nextConfig = materializeLegacyAgentOwnershipForActiveChannels(
+      nextConfig,
+      previousSoleAgentId,
+      deps.env,
+    );
+  }
+  const topologyOwnershipPaths: string[][] = crossesIntoMultiAgent
+    ? [
+        ...(Array.isArray(nextConfig.bindings) ? [["bindings"]] : []),
+        ...(nextConfig.agents?.defaults?.heartbeat?.agentId
+          ? [["agents", "defaults", "heartbeat", "agentId"]]
+          : []),
+        ...(nextConfig.agents?.defaults?.systemAgent?.agentId
+          ? [["agents", "defaults", "systemAgent", "agentId"]]
+          : []),
+        ...(nextConfig.talk?.agentId ? [["talk", "agentId"]] : []),
+        ...(typeof nextConfig.plugins?.entries?.["voice-call"]?.config?.agentId === "string"
+          ? [["plugins", "entries", "voice-call", "config", "agentId"]]
+          : []),
+      ]
+    : [];
+  const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyOwnershipPaths];
+  const cronHandoffAgentId =
+    retainedLegacyDefaultAgentId && nextAgentIds.has(normalizeAgentId(retainedLegacyDefaultAgentId))
+      ? retainedLegacyDefaultAgentId
+      : crossesIntoMultiAgent
+        ? previousSoleAgentId
+        : undefined;
+  if (cronHandoffAgentId) {
     const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
       storePath: resolveCronJobsStorePathFromConfig(snapshot.config, deps.env),
-      legacyDefaultAgentId,
+      legacyDefaultAgentId: cronHandoffAgentId,
       env: deps.env,
     });
     if (cronOwnerMigration.warnings.length > 0) {
@@ -140,10 +208,19 @@ export async function writeConfigFileFromContext(
       );
     }
   }
+  persistCandidate = nextConfig;
+  let explicitSetValueSource: unknown = options.explicitSetValueSource ?? nextConfig;
+  for (const ownershipPath of topologyOwnershipPaths) {
+    explicitSetValueSource = setConfigPath(
+      explicitSetValueSource,
+      ownershipPath,
+      readConfigPath(nextConfig, ownershipPath),
+    );
+  }
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, cfg, "", changedPaths);
-  for (const changedPath of [...(options.explicitSetPaths ?? []), ...(options.unsetPaths ?? [])]) {
+  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  for (const changedPath of [...explicitSetPaths, ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
       changedPaths.add(normalizedPath);
@@ -160,12 +237,12 @@ export async function writeConfigFileFromContext(
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
-      explicitSetPaths: options.explicitSetPaths,
-      explicitSetValueSource: options.explicitSetValueSource,
+      explicitSetPaths,
+      explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
       modelIdNormalizationPolicies: resolveModelIdNormalizationPolicies(
@@ -176,7 +253,7 @@ export async function writeConfigFileFromContext(
     persistCandidate = preserveIncludeOwnedConfigForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
     });
   }

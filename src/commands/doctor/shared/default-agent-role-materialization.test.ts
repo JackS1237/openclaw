@@ -202,4 +202,30 @@ describe("retired default role materialization", () => {
       { agentId: "research", heartbeat: { every: "1h" } },
     ]);
   });
+
+  it.each([
+    ["marked", { ops: { default: true }, research: {} }],
+    ["marker-free legacy", { ops: {}, research: {} }],
+  ] as const)(
+    "persists the %s owner into an enabled voice-call plugin config",
+    (_label, entries) => {
+      const migrated = migratePersistedImplicitMainRoster({
+        agents: { entries },
+        plugins: {
+          entries: {
+            "voice-call": {
+              enabled: true,
+              config: { enabled: true, provider: "mock" },
+            },
+          },
+        },
+      }).config as OpenClawConfig;
+
+      expect(migrated.plugins?.entries?.["voice-call"]?.config).toMatchObject({
+        enabled: true,
+        provider: "mock",
+        agentId: "ops",
+      });
+    },
+  );
 });

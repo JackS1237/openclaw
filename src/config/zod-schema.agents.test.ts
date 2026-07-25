@@ -91,6 +91,7 @@ describe("multi-agent ambient ownership warnings", () => {
     const result = validateConfigObjectWithPlugins(
       {
         agents: { entries: { ops: {}, research: {} } },
+        bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "work" } }],
         channels: { telegram: { enabled: true } },
       },
       { pluginValidation: "skip" },

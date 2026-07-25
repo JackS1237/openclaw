@@ -80,7 +80,7 @@ export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  const migrated = migratePersistedImplicitMainRoster(raw, params?.env).config as OpenClawConfig;
   return materializeLegacyActiveChannelOwners(
     validateConfigObjectWithPluginsBase(migrated, {
       applyDefaults: true,
@@ -100,7 +100,7 @@ export function validateConfigObjectRawWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config as OpenClawConfig;
+  const migrated = migratePersistedImplicitMainRoster(raw, params?.env).config as OpenClawConfig;
   return materializeLegacyActiveChannelOwners(
     validateConfigObjectWithPluginsBase(migrated, {
       applyDefaults: false,
@@ -128,20 +128,41 @@ function materializeLegacyActiveChannelOwners(
   if (!legacyDefaultAgentId) {
     return result;
   }
-  const activationSourceConfig = applyPluginAutoEnable({ config: result.config, env }).config;
+  return {
+    ...result,
+    config: materializeLegacyAgentOwnershipForActiveChannels(
+      result.config,
+      legacyDefaultAgentId,
+      env,
+    ),
+  };
+}
+
+/** Materializes all active ambient surfaces for one retained or transitional owner. */
+export function materializeLegacyAgentOwnershipForActiveChannels(
+  config: OpenClawConfig,
+  legacyDefaultAgentId: string,
+  env?: NodeJS.ProcessEnv,
+): OpenClawConfig {
+  const activationSourceConfig = applyPluginAutoEnable({ config, env }).config;
   const ambientChannelIds = resolveConfiguredChannelPresencePolicy({
-    config: result.config,
+    config,
     activationSourceConfig,
     env,
     includePersistedAuthState: false,
   })
-    .filter((entry) => entry.effective)
+    .filter(
+      (entry) =>
+        entry.effective ||
+        (entry.blockedReasons.length > 0 &&
+          entry.blockedReasons.every((reason) => reason === "bundled-disabled-by-default")),
+    )
     .map((entry) => entry.channelId);
-  const materialized = materializeLegacyDefaultAgentRoles(result.config, legacyDefaultAgentId, {
+  const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
   }).config;
   retainLegacyDefaultAgentId(materialized, legacyDefaultAgentId);
-  return { ...result, config: materialized };
+  return materialized;
 }
 
 function validateConfigObjectWithPluginsBase(

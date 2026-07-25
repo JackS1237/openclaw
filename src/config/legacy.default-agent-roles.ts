@@ -14,6 +14,26 @@ export type LegacyDefaultAgentRoleMaterialization = {
   changes: string[];
 };
 
+function readVoiceCallPluginConfig(cfg: OpenClawConfig): Record<string, unknown> | undefined {
+  const config = cfg.plugins?.entries?.["voice-call"]?.config;
+  return isRecord(config) ? config : undefined;
+}
+
+/** True when an H2-era surface already declares any ambient agent ownership. */
+export function hasExplicitAmbientAgentOwnership(cfg: OpenClawConfig): boolean {
+  const bindings = Array.isArray(cfg.bindings)
+    ? cfg.bindings.filter((binding) => isRecord(binding) && binding.type !== "acp")
+    : [];
+  return (
+    bindings.length > 0 ||
+    Boolean(normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId)) ||
+    listAgentEntries(cfg).some((entry) => Boolean(entry.heartbeat)) ||
+    Boolean(normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId)) ||
+    Boolean(normalizeOptionalString(cfg.talk?.agentId)) ||
+    Boolean(normalizeOptionalString(readVoiceCallPluginConfig(cfg)?.agentId))
+  );
+}
+
 function listAmbientConfiguredChannelIds(
   cfg: OpenClawConfig,
   ambientChannelIds: readonly string[] = [],
@@ -204,6 +224,30 @@ export function materializeLegacyDefaultAgentRoles(
       talk: { ...talkConfig, agentId: defaultAgentId },
     };
     changes.push(`Assigned ambient Talk sessions to agent "${defaultAgentId}".`);
+  }
+
+  const voiceCallEntry = cfg.plugins?.entries?.["voice-call"];
+  const voiceCallConfig = readVoiceCallPluginConfig(cfg);
+  if (
+    voiceCallEntry?.enabled !== false &&
+    voiceCallConfig?.enabled === true &&
+    voiceCallConfig !== undefined &&
+    !Object.hasOwn(voiceCallConfig, "agentId")
+  ) {
+    next = {
+      ...next,
+      plugins: {
+        ...next.plugins,
+        entries: {
+          ...next.plugins?.entries,
+          "voice-call": {
+            ...voiceCallEntry,
+            config: { ...voiceCallConfig, agentId: defaultAgentId },
+          },
+        },
+      },
+    };
+    changes.push(`Assigned ambient voice-call sessions to agent "${defaultAgentId}".`);
   }
 
   return { config: next, changes };

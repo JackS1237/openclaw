@@ -7,7 +7,12 @@ import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { tryGetLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
-import { validateConfigObjectRaw } from "./validation.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+import {
+  validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 describe("persisted implicit-main roster migration", () => {
   it("normalizes a commented pre-roster config in memory without rewriting it", async () => {
@@ -396,10 +401,10 @@ describe("persisted implicit-main roster migration", () => {
 
   it.each([
     {
-      label: "marker absent",
+      label: "legacy marker-free entries",
       entries: { ops: {}, research: {} },
       expected: { ops: {}, research: {} },
-      expectedOwner: undefined,
+      expectedOwner: "ops",
     },
     {
       label: "duplicate defaults",
@@ -437,6 +442,46 @@ describe("persisted implicit-main roster migration", () => {
       });
     });
   });
+
+  it("keeps a marker-free fleet ownerless when any explicit ambient binding exists", () => {
+    const raw = {
+      agents: { entries: { ops: {}, research: {} } },
+      bindings: [{ agentId: "research", match: { channel: "telegram", accountId: "*" } }],
+    };
+
+    const migrated = migratePersistedImplicitMainRoster(raw);
+
+    expect(migrated).toEqual({ config: raw, changed: false, diagnostics: [] });
+    expect(tryGetLegacyDefaultAgentId(migrated.config as OpenClawConfig)).toBeUndefined();
+    expect(
+      (migrated.config as { agents?: { defaults?: unknown } }).agents?.defaults,
+    ).toBeUndefined();
+    expect((migrated.config as { talk?: unknown }).talk).toBeUndefined();
+  });
+
+  it.each([
+    ["runtime", validateConfigObjectWithPlugins],
+    ["raw", validateConfigObjectRawWithPlugins],
+  ] as const)(
+    "uses the isolated env during %s plugin-aware roster migration",
+    (_label, validate) => {
+      const home = path.join("/tmp", "openclaw-isolated-validation-home");
+      const result = validate(
+        { agents: { entries: { ops: { default: true }, research: {} } } },
+        {
+          env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
+          pluginValidation: "skip",
+        },
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.ops?.workspace).toBe(
+          path.join(home, ".openclaw", "workspace"),
+        );
+      }
+    },
+  );
 
   it("binds an env-activated Discord channel before retiring a multi-agent marker", async () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-only-token");

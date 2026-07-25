@@ -1,7 +1,10 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { retainLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
-import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import {
+  hasExplicitAmbientAgentOwnership,
+  materializeLegacyDefaultAgentRoles,
+} from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type MigrationResult = {
@@ -66,7 +69,15 @@ export function tryResolveLegacyDefaultAgentId(raw: unknown): string | undefined
     return marked.id;
   }
   const hasBooleanMarker = valid.some(({ entry }) => Object.hasOwn(entry, "default"));
-  return rosterProperty.kind === "list" || hasBooleanMarker ? valid[0]!.id : undefined;
+  if (rosterProperty.kind === "list" || hasBooleanMarker) {
+    return valid[0]!.id;
+  }
+  // H2-0 explicit ownership is the only durable generation signal: older
+  // marker-free maps used first-entry ownership, while new ownerless fleets
+  // carry at least one explicit binding/target before the marker retirement.
+  return valid.length > 1 && !hasExplicitAmbientAgentOwnership(raw as OpenClawConfig)
+    ? valid[0]!.id
+    : undefined;
 }
 
 function injectImplicitMain(

@@ -46,6 +46,14 @@ describe("default role materialization authored writes", () => {
             },
           },
           channels: { $include: "./channels.json5" },
+          plugins: {
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: { enabled: true, provider: "mock" },
+              },
+            },
+          },
           talk: { provider: "test" },
         },
         null,
@@ -83,7 +91,10 @@ describe("default role materialization authored writes", () => {
       channels?: { $include?: string };
       bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
       talk?: { agentId?: string };
-      plugins?: { load?: { paths?: string[] } };
+      plugins?: {
+        load?: { paths?: string[] };
+        entries?: Record<string, { config?: Record<string, unknown> }>;
+      };
     };
     expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
@@ -100,6 +111,7 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
     expect(persisted.talk?.agentId).toBe("ops");
     expect(persisted.plugins?.load?.paths).toContain(workspacePluginPath);
+    expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
 
     const firstPersisted = await fs.readFile(configPath, "utf-8");
     const reread = await io.readConfigFileSnapshot();
@@ -107,27 +119,133 @@ describe("default role materialization authored writes", () => {
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(firstPersisted);
   });
 
-  it("persists a sole legacy cron owner before a roster write retires the marker", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-cron-owner-"));
+  it.each([
+    { label: "marked", entry: { default: true } },
+    { label: "markerless", entry: {} },
+  ])(
+    "persists a $label sole cron owner before a roster write creates a fleet",
+    async ({ entry }) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-cron-owner-"));
+      roots.push(root);
+      const configPath = path.join(root, "openclaw.json");
+      const stateDir = path.join(root, "state-root");
+      const env = {
+        HOME: root,
+        DISCORD_BOT_TOKEN: "env-only-token",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_FAST: "1",
+      } as NodeJS.ProcessEnv;
+      const storePath = resolveCronJobsStorePath(undefined, env);
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          agents: { entries: { ops: entry } },
+          plugins: {
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: { enabled: true, provider: "mock" },
+              },
+            },
+          },
+        })}\n`,
+        "utf-8",
+      );
+      const ownerlessJob: CronJob = {
+        id: "ownerless",
+        name: "ownerless",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run" },
+        state: {},
+      };
+
+      await withEnvAsync(env, async () => {
+        await saveCronJobsStore(storePath, { version: 1, jobs: [ownerlessJob] });
+        const io = createConfigIO({
+          configPath,
+          env,
+          homedir: () => root,
+          observe: false,
+          logger: { warn: () => {}, error: () => {} },
+        });
+        const snapshot = await io.readConfigFileSnapshot();
+        const nextConfig = {
+          ...snapshot.config,
+          agents: {
+            ...snapshot.config.agents,
+            entries: { ...snapshot.config.agents?.entries, research: {} },
+          },
+        };
+        const explicitSetValueSource = {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents.defaults,
+              model: { primary: "openai/gpt-5.5" },
+            },
+          },
+        };
+
+        await io.writeConfigFile(nextConfig, {
+          baseSnapshot: snapshot,
+          explicitSetPaths: [["agents"]],
+          explicitSetValueSource,
+        });
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          agents?: {
+            defaults?: {
+              heartbeat?: { agentId?: string };
+              model?: { primary?: string };
+              systemAgent?: { agentId?: string };
+            };
+            entries?: Record<string, { default?: boolean }>;
+          };
+          bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
+          plugins?: { entries?: Record<string, { config?: Record<string, unknown> }> };
+          talk?: { agentId?: string };
+        };
+        expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+        expect(persisted.bindings).toContainEqual({
+          agentId: "ops",
+          match: { channel: "discord", accountId: "*" },
+        });
+        expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+        expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("ops");
+        expect(persisted.talk?.agentId).toBe("ops");
+        expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
+        expect(persisted.agents?.defaults?.model?.primary).toBe("openai/gpt-5.5");
+        expect(
+          (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
+        ).toBe("ops");
+      });
+    },
+  );
+
+  it("does not hand ownership to a previous sole agent removed by the fleet write", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replaced-sole-owner-"));
     roots.push(root);
     const configPath = path.join(root, "openclaw.json");
-    const stateDir = path.join(root, "state-root");
     const env = {
       HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_STATE_DIR: path.join(root, "state-root"),
       OPENCLAW_TEST_FAST: "1",
     } as NodeJS.ProcessEnv;
     const storePath = resolveCronJobsStorePath(undefined, env);
     await fs.writeFile(
       configPath,
-      `${JSON.stringify({
-        agents: { entries: { ops: { default: true } } },
-      })}\n`,
+      `${JSON.stringify({ agents: { entries: { ops: {} } } })}\n`,
       "utf-8",
     );
     const ownerlessJob: CronJob = {
-      id: "ownerless",
-      name: "ownerless",
+      id: "ownerless-replacement",
+      name: "ownerless replacement",
       enabled: true,
       createdAtMs: 1,
       updatedAtMs: 1,
@@ -151,9 +269,15 @@ describe("default role materialization authored writes", () => {
       const nextConfig = {
         ...snapshot.config,
         agents: {
-          ...snapshot.config.agents,
-          entries: { ...snapshot.config.agents?.entries, research: {} },
+          defaults: {
+            ...snapshot.config.agents?.defaults,
+            heartbeat: { agentId: "research" },
+            systemAgent: { agentId: "research" },
+          },
+          entries: { research: {}, writer: {} },
         },
+        bindings: [{ agentId: "research", match: { channel: "discord", accountId: "*" } }],
+        talk: { ...snapshot.config.talk, agentId: "research" },
       };
 
       await io.writeConfigFile(nextConfig, {
@@ -163,12 +287,12 @@ describe("default role materialization authored writes", () => {
       });
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        agents?: { entries?: Record<string, { default?: boolean }> };
+        agents?: { entries?: Record<string, unknown> };
       };
-      expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+      expect(persisted.agents?.entries).toEqual({ research: {}, writer: {} });
       expect(
         (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
-      ).toBe("ops");
+      ).toBeUndefined();
     });
   });
 });
