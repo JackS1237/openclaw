@@ -13,10 +13,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import {
-  resolveAmbientHeartbeatAgentId,
-  type HeartbeatConfig,
-} from "./heartbeat-runner-config.js";
+import { resolveAmbientHeartbeatAgentId, type HeartbeatConfig } from "./heartbeat-runner-config.js";
 
 export function resolveHeartbeatSession(
   cfg: OpenClawConfig,

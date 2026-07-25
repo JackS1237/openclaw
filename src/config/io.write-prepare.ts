@@ -942,12 +942,26 @@ function canCanonicalizeAgentRoster(value: unknown): boolean {
 function shouldPersistCanonicalAgentRoster(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
+  sourceConfigBeforeMigrations?: unknown;
   nextConfig: unknown;
   explicitSetPaths?: readonly (readonly string[])[];
   unsetPaths?: readonly (readonly string[])[];
 }): boolean {
   if (!canCanonicalizeAgentRoster(params.nextConfig)) {
     return false;
+  }
+  const preMigrationRoster = readAgentRosterProperty(params.sourceConfigBeforeMigrations);
+  if (preMigrationRoster?.kind === "list") {
+    return true;
+  }
+  if (
+    preMigrationRoster?.kind === "entries" &&
+    isRecord(preMigrationRoster.value) &&
+    Object.values(preMigrationRoster.value).some(
+      (entry) => isRecord(entry) && typeof entry.default === "boolean",
+    )
+  ) {
+    return true;
   }
   if (
     params.explicitSetPaths?.some(pathTouchesAgentRoster) ||
