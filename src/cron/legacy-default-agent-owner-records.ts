@@ -9,10 +9,9 @@ export function materializeLegacyDefaultCronJobOwnersInRecords(
   const agentId = normalizeAgentId(legacyDefaultAgentId);
   let rewritten = 0;
   for (const job of jobs) {
-    const explicitAgentId = normalizeOptionalString(job.agentId);
     const sessionKey = normalizeOptionalString(job.sessionKey);
     const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-    if (explicitAgentId || scopedAgentId) {
+    if (Object.hasOwn(job, "agentId") || scopedAgentId) {
       continue;
     }
     job.agentId = agentId;

@@ -12,7 +12,10 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { materializeLegacyDefaultCronJobOwnersInRecords } from "../legacy-default-agent-owner-records.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
-import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
+import {
+  getInvalidPersistedCronJobOwnerReason,
+  getInvalidPersistedCronJobReason,
+} from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
@@ -193,6 +196,9 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob | null {
   const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  if (getInvalidPersistedCronJobOwnerReason(raw)) {
+    return null;
+  }
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -486,7 +492,10 @@ export function materializeCronRowAgentOwners(
   return runSqliteImmediateTransactionSync(db, () => {
     let rewritten = 0;
     for (const row of loadCronRows(db, storeKey)) {
-      const owner = { agentId: row.agent_id, sessionKey: row.session_key };
+      const owner = {
+        ...(row.agent_id === null ? {} : { agentId: row.agent_id }),
+        ...(row.session_key === null ? {} : { sessionKey: row.session_key }),
+      };
       if (
         materializeLegacyDefaultCronJobOwnersInRecords([owner], legacyDefaultAgentId) === 0 ||
         typeof owner.agentId !== "string"
