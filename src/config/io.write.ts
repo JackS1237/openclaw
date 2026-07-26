@@ -184,15 +184,15 @@ export async function writeConfigFileFromContext(
   const previousAgentCount = listAgentEntries(snapshot.config).length;
   const nextAgentEntries = listAgentEntries(nextConfig);
   const nextAgentIds = new Set(nextAgentEntries.map((entry) => normalizeAgentId(entry.id)));
-  // Generation is independent from handoff: a removed sole agent cannot grant
-  // ownership to its replacements, and the new fleet must fail closed instead of falling back.
+  // Stamp topology transitions and retained legacy owners independently from sole-agent handoff.
   const entersMultiAgent = previousAgentCount <= 1 && nextAgentEntries.length > 1;
   const previousSoleRemains =
     previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
   const previousSoleHandoffAgentId =
     entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined;
+  const persistOwnership = entersMultiAgent || retainedLegacyDefaultAgentId !== undefined;
   const shouldStampOwnershipGeneration =
-    entersMultiAgent && nextConfig.agents?.ownership === undefined;
+    persistOwnership && nextConfig.agents?.ownership === undefined;
   const ownershipGenerationInserted =
     shouldStampOwnershipGeneration && snapshot.config.agents?.ownership !== "explicit";
   if (shouldStampOwnershipGeneration) {
@@ -223,18 +223,17 @@ export async function writeConfigFileFromContext(
     nextConfig = materialized.config;
     transitionInsertedPaths = [...transitionInsertedPaths, ...materialized.insertedPaths];
   }
-  const topologyOwnershipPaths =
-    entersMultiAgent || retainedLegacyDefaultAgentId
-      ? [
-          ...new Map(
-            [
-              ...legacySourceInsertedPaths,
-              ...retainedLegacyRuntimeInsertedPaths,
-              ...transitionInsertedPaths,
-            ].map((ownershipPath) => [ownershipPath.join("\0"), ownershipPath]),
-          ).values(),
-        ]
-      : [];
+  const topologyOwnershipPaths = persistOwnership
+    ? [
+        ...new Map(
+          [
+            ...legacySourceInsertedPaths,
+            ...retainedLegacyRuntimeInsertedPaths,
+            ...transitionInsertedPaths,
+          ].map((ownershipPath) => [ownershipPath.join("\0"), ownershipPath]),
+        ).values(),
+      ]
+    : [];
   assertAutomaticBindingsWriteAllowed({
     bindingsIncludeOwned: snapshot.bindingsIncludeOwned === true,
     ownershipPaths: topologyOwnershipPaths,

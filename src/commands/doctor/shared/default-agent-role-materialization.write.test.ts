@@ -294,6 +294,78 @@ describe("default role materialization authored writes", () => {
     expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
   });
 
+  it("stamps an existing legacy fleet with its non-first default during agents add", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-existing-legacy-fleet-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: {
+          entries: {
+            ops: {},
+            research: { default: true },
+            support: {},
+          },
+        },
+        channels: { telegram: { enabled: true } },
+      })}\n`,
+      "utf-8",
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.config.agents?.defaults?.heartbeat?.agentId).toBe("research");
+    const nextConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        entries: { ...snapshot.config.agents?.entries, analytics: {} },
+      },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      agents?: {
+        ownership?: string;
+        defaults?: { heartbeat?: { agentId?: string }; systemAgent?: { agentId?: string } };
+        entries?: Record<string, { default?: boolean; workspace?: string }>;
+      };
+      bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
+      talk?: { agentId?: string };
+    };
+    expect(persisted.agents?.ownership).toBe("explicit");
+    expect(persisted.agents?.entries).toMatchObject({
+      ops: {},
+      research: { workspace: path.join(root, ".openclaw", "workspace") },
+      support: {},
+      analytics: {},
+    });
+    expect(persisted.agents?.entries?.research).not.toHaveProperty("default");
+    expect(persisted.agents?.entries?.ops?.workspace).toBeUndefined();
+    expect(persisted.bindings).toContainEqual({
+      agentId: "research",
+      match: { channel: "telegram", accountId: "*" },
+    });
+    expect(persisted.bindings).not.toContainEqual({
+      agentId: "ops",
+      match: { channel: "telegram", accountId: "*" },
+    });
+    expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("research");
+    expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("research");
+    expect(persisted.talk?.agentId).toBe("research");
+  });
+
   it("persists an env-activated channel binding when Doctor stamps a legacy fleet", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-env-channel-stamp-"));
     roots.push(root);
