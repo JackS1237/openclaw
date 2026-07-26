@@ -13,6 +13,7 @@ export type LegacyDefaultAgentRoleMaterialization = {
   config: OpenClawConfig;
   changes: string[];
   warnings: Array<{ path: string; message: string }>;
+  insertedPaths: string[][];
 };
 
 function readVoiceCallPluginConfig(cfg: OpenClawConfig): Record<string, unknown> | undefined {
@@ -121,6 +122,7 @@ export function materializeLegacyDefaultAgentRoles(
   let next = cfg;
   const changes: string[] = [];
   const warnings: Array<{ path: string; message: string }> = [];
+  const insertedPaths: string[][] = [];
   const missingChannelBindings = listUnboundAmbientChannelIds(cfg, options.ambientChannelIds);
   if (options.materializeWorkspace) {
     const entries = { ...next.agents?.entries };
@@ -137,6 +139,7 @@ export function materializeLegacyDefaultAgentRoles(
       // An authored-but-malformed value must survive until schema validation.
       if (!Object.hasOwn(entry, "workspace")) {
         entries[entryKey!] = { ...entry, workspace };
+        insertedPaths.push(["agents", "entries", entryKey!, "workspace"]);
         changes.push(
           `Pinned the retired default agent "${defaultAgentId}" to its current workspace.`,
         );
@@ -173,6 +176,9 @@ export function materializeLegacyDefaultAgentRoles(
           : {}),
       };
       if (preservePluginPath && pluginPath) {
+        if (!pluginPaths.includes(pluginPath)) {
+          insertedPaths.push(["plugins", "load", "paths"]);
+        }
         changes.push(`Preserved workspace plugin discovery at "${pluginPath}".`);
       }
     }
@@ -191,6 +197,7 @@ export function materializeLegacyDefaultAgentRoles(
     changes.push(
       `Bound ${missingChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
     );
+    insertedPaths.push(["bindings"]);
     for (const channelId of missingChannelBindings) {
       warnings.push({
         path: `channels.${channelId}`,
@@ -216,6 +223,7 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient heartbeat runs to agent "${defaultAgentId}".`);
+    insertedPaths.push(["agents", "defaults", "heartbeat", "agentId"]);
     warnings.push({
       path: "agents.defaults.heartbeat.agentId",
       message: `legacy marker-free fleet temporarily assigns ambient heartbeat runs to first roster agent "${defaultAgentId}"; set agents.defaults.heartbeat.agentId or run "openclaw doctor --fix"`,
@@ -243,6 +251,7 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient system-agent consults to agent "${defaultAgentId}".`);
+    insertedPaths.push(["agents", "defaults", "systemAgent", "agentId"]);
     warnings.push({
       path: "agents.defaults.systemAgent.agentId",
       message: `legacy marker-free fleet temporarily assigns system-agent consults to first roster agent "${defaultAgentId}"; set agents.defaults.systemAgent.agentId or run "openclaw doctor --fix"`,
@@ -259,6 +268,7 @@ export function materializeLegacyDefaultAgentRoles(
       talk: { ...talkConfig, agentId: defaultAgentId },
     };
     changes.push(`Assigned ambient Talk sessions to agent "${defaultAgentId}".`);
+    insertedPaths.push(["talk", "agentId"]);
     warnings.push({
       path: "talk.agentId",
       message: `legacy marker-free fleet temporarily assigns Talk sessions to first roster agent "${defaultAgentId}"; set talk.agentId or run "openclaw doctor --fix"`,
@@ -287,11 +297,12 @@ export function materializeLegacyDefaultAgentRoles(
       },
     };
     changes.push(`Assigned ambient voice-call sessions to agent "${defaultAgentId}".`);
+    insertedPaths.push(["plugins", "entries", "voice-call", "config", "agentId"]);
     warnings.push({
       path: "plugins.entries.voice-call.config.agentId",
       message: `legacy marker-free fleet temporarily assigns voice-call sessions to first roster agent "${defaultAgentId}"; set plugins.entries.voice-call.config.agentId or run "openclaw doctor --fix"`,
     });
   }
 
-  return { config: next, changes, warnings };
+  return { config: next, changes, warnings, insertedPaths };
 }

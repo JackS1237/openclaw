@@ -8,6 +8,7 @@ export type AgentWorkspaceOwnershipPin = {
   config: OpenClawConfig;
   workspace?: string;
   pluginPath?: string;
+  insertedPaths: string[][];
 };
 
 /** Pins a sole agent's resolved workspace before a write expands the roster. */
@@ -24,7 +25,7 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
   );
   const entry = entryKey ? entries[entryKey] : undefined;
   if (!entry || Object.hasOwn(entry, "workspace")) {
-    return { config: params.targetConfig };
+    return { config: params.targetConfig, insertedPaths: [] };
   }
 
   // Resolve against the old sole-agent topology. Resolving after the roster
@@ -55,6 +56,12 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
         : {}),
     },
     workspace,
-    ...(preservePluginPath ? { pluginPath } : {}),
+    ...(preservePluginPath && !pluginPaths.includes(pluginPath) ? { pluginPath } : {}),
+    insertedPaths: [
+      ["agents", "entries", entryKey!, "workspace"],
+      ...(preservePluginPath && !pluginPaths.includes(pluginPath)
+        ? [["plugins", "load", "paths"]]
+        : []),
+    ],
   };
 }

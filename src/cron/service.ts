@@ -1,4 +1,5 @@
 /** Stateful CronService facade around the locked service operation helpers. */
+import { registerLiveCronService } from "./live-service-registry.js";
 import type {
   CronServiceContract,
   CronServiceRunOptions,
@@ -29,6 +30,7 @@ export class CronService implements CronServiceContract {
   private startInProgress = 0;
   private startState: { generation: number; promise: Promise<void> } | null = null;
   private lifecycleGeneration = 0;
+  private liveServiceRegistration: { unregister: () => void } | null = null;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
@@ -66,6 +68,16 @@ export class CronService implements CronServiceContract {
     this.startInProgress += 1;
     this.state.schedulerStarted = false;
     try {
+      if (!this.liveServiceRegistration) {
+        const registration = registerLiveCronService(this.state.deps.storePath, this);
+        this.liveServiceRegistration = registration;
+        await registration.ready;
+        if (generation !== this.lifecycleGeneration) {
+          registration.unregister();
+          this.liveServiceRegistration = null;
+          return;
+        }
+      }
       await lifecycleOps.start(this.state);
       if (generation !== this.lifecycleGeneration) {
         lifecycleOps.stop(this.state);
@@ -74,12 +86,25 @@ export class CronService implements CronServiceContract {
       this.state.schedulerStarted = !this.state.stopped;
     } finally {
       this.startInProgress -= 1;
+      if (!this.state.schedulerStarted) {
+        this.liveServiceRegistration?.unregister();
+        this.liveServiceRegistration = null;
+      }
     }
   }
 
   stop() {
     this.lifecycleGeneration += 1;
     lifecycleOps.stop(this.state);
+    this.liveServiceRegistration?.unregister();
+    this.liveServiceRegistration = null;
+  }
+
+  async beginLegacyDefaultAgentOwnerHandoff(legacyDefaultAgentId: string) {
+    return await lifecycleOps.beginLegacyDefaultAgentOwnerHandoff(
+      this.state,
+      legacyDefaultAgentId,
+    );
   }
 
   pauseScheduling() {

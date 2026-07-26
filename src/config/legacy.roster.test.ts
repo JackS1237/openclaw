@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+
+const persistedAuthProbe = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  listBundledChannelIdsWithPersistedAuthState: () => ["whatsapp"],
+  hasBundledChannelPersistedAuthState: () => persistedAuthProbe.enabled,
+}));
+
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
@@ -572,6 +579,41 @@ describe("persisted implicit-main roster migration", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("binds a persisted-auth-only channel before retiring a marker-free owner", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, "state");
+      await fs.mkdir(stateDir, { recursive: true });
+      persistedAuthProbe.enabled = true;
+      try {
+        const result = validateConfigObjectWithPlugins(
+          {
+            agents: { entries: { ops: {}, research: {} } },
+            plugins: { entries: { whatsapp: { enabled: true } } },
+          },
+          {
+            env: {
+              HOME: home,
+              OPENCLAW_STATE_DIR: stateDir,
+            } as NodeJS.ProcessEnv,
+            pluginValidation: "skip",
+          },
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) {
+          return;
+        }
+        expect(result.config.bindings).toContainEqual({
+          agentId: "ops",
+          match: { channel: "whatsapp", accountId: "*" },
+        });
+        expect(tryGetLegacyDefaultAgentId(result.config)).toBe("ops");
+      } finally {
+        persistedAuthProbe.enabled = false;
+      }
+    });
   });
 
   it("materializes a sole legacy marker before preserving malformed siblings", () => {

@@ -410,6 +410,51 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
+  it("materializes a legacy owner after load merges imported jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const importedJob: CronJob = {
+      id: "legacy-json-import",
+      name: "legacy json import",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce({
+        store: { version: 1, jobs: [structuredClone(importedJob)] },
+        configJobs: [structuredClone(importedJob) as unknown as Record<string, unknown>],
+        configJobIndexes: [0],
+        configJobRuntimeEntries: [],
+        invalidConfigRows: [],
+      });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+      expect(state.store?.jobs[0]?.agentId).toBe("ops");
+      expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("ops");
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+    }
+  });
+
   it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");

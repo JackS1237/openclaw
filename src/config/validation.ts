@@ -9,7 +9,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { resolveConfiguredChannelPresencePolicy } from "../plugins/channel-presence-policy.js";
+import { listGatewayActivatedChannelIds } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -33,7 +33,10 @@ import {
   listLegacyOwnershipWarnings,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
-import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import {
+  materializeLegacyDefaultAgentRoles,
+  type LegacyDefaultAgentRoleMaterialization,
+} from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
@@ -134,11 +137,12 @@ function materializeLegacyActiveChannelOwners(
   // Zod returns a fresh object, so carry the non-schema migration state across
   // validation before active-channel discovery decides whether it is durable.
   const validatedConfig = inheritLegacyDefaultAgentId(migrated, result.config);
-  const config = materializeLegacyAgentOwnershipForActiveChannels(
+  const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
     validatedConfig,
     legacyDefaultAgentId,
     env,
   );
+  const config = materialized.config;
   finalizeProvisionalLegacyDefaultAgent(config);
   const warnings = [...result.warnings, ...listLegacyOwnershipWarnings(config)];
   const seenWarnings = new Set<string>();
@@ -162,26 +166,27 @@ export function materializeLegacyAgentOwnershipForActiveChannels(
   legacyDefaultAgentId: string,
   env?: NodeJS.ProcessEnv,
 ): OpenClawConfig {
+  return materializeLegacyAgentOwnershipForActiveChannelsResult(config, legacyDefaultAgentId, env)
+    .config;
+}
+
+export function materializeLegacyAgentOwnershipForActiveChannelsResult(
+  config: OpenClawConfig,
+  legacyDefaultAgentId: string,
+  env?: NodeJS.ProcessEnv,
+): LegacyDefaultAgentRoleMaterialization {
   const activationSourceConfig = applyPluginAutoEnable({ config, env }).config;
-  const ambientChannelIds = resolveConfiguredChannelPresencePolicy({
+  const ambientChannelIds = listGatewayActivatedChannelIds({
     config,
     activationSourceConfig,
     env,
-    includePersistedAuthState: false,
-  })
-    .filter(
-      (entry) =>
-        entry.effective ||
-        (entry.blockedReasons.length > 0 &&
-          entry.blockedReasons.every((reason) => reason === "bundled-disabled-by-default")),
-    )
-    .map((entry) => entry.channelId);
+  });
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
   });
   const next = inheritLegacyDefaultAgentId(config, materialized.config);
   appendProvisionalLegacyOwnershipWarnings(next, materialized.warnings);
-  return next;
+  return { ...materialized, config: next };
 }
 
 function validateConfigObjectWithPluginsBase(

@@ -1,7 +1,7 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
-import { locked } from "./locked.js";
+import { acquireCronOperationLock, locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import {
@@ -15,6 +15,34 @@ import { ensureLoaded, persist } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
+async function materializeLoadedLegacyDefaultAgentOwners(
+  state: CronServiceState,
+  legacyDefaultAgentId: string,
+) {
+  const jobs = state.store?.jobs ?? [];
+  return await materializeLegacyDefaultCronJobOwners({
+    storePath: state.deps.storePath,
+    legacyDefaultAgentId,
+    records: jobs as unknown as Array<Record<string, unknown>>,
+  });
+}
+
+/** Locks mutations after materializing the loaded store until the topology commit settles. */
+export async function beginLegacyDefaultAgentOwnerHandoff(
+  state: CronServiceState,
+  legacyDefaultAgentId: string,
+) {
+  const release = await acquireCronOperationLock(state);
+  try {
+    await ensureLoaded(state, { skipRecompute: true });
+    const migration = await materializeLoadedLegacyDefaultAgentOwners(state, legacyDefaultAgentId);
+    return { migration, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
 export async function start(state: CronServiceState) {
   state.stopped = false;
@@ -23,25 +51,24 @@ export async function start(state: CronServiceState) {
     return;
   }
 
-  if (state.deps.legacyDefaultAgentId) {
-    const migration = await materializeLegacyDefaultCronJobOwners({
-      storePath: state.deps.storePath,
-      legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
-    });
-    if (migration.warnings.length > 0) {
-      throw new Error(migration.warnings.join("\n"));
-    }
-    for (const change of migration.changes) {
-      state.deps.log.info({ storePath: state.deps.storePath }, `cron: ${change}`);
-    }
-  }
-
   const interruptedJobIds = new Set<string>();
   const interruptedRuns: InterruptedStartupRun[] = [];
   const completedJobIdsToDelete = new Set<string>();
   let repairedAnyStartupRun = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+    if (state.deps.legacyDefaultAgentId) {
+      const migration = await materializeLoadedLegacyDefaultAgentOwners(
+        state,
+        state.deps.legacyDefaultAgentId,
+      );
+      if (migration.warnings.length > 0) {
+        throw new Error(migration.warnings.join("\n"));
+      }
+      for (const change of migration.changes) {
+        state.deps.log.info({ storePath: state.deps.storePath }, `cron: ${change}`);
+      }
+    }
     if (state.stopped) {
       return;
     }

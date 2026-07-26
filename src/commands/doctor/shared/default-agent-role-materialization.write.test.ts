@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../config/io.js";
+import { CronService } from "../../../cron/service.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
@@ -119,6 +120,54 @@ describe("default role materialization authored writes", () => {
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(firstPersisted);
   });
 
+  it("preserves include-owned bindings byte-for-byte during a sole-to-fleet write", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-binding-include-handoff-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const bindingsPath = path.join(root, "bindings.json5");
+    const bindingsRaw = `${JSON.stringify([
+      { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+    ])}\n`;
+    await fs.writeFile(bindingsPath, bindingsRaw, "utf-8");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: { entries: { ops: {} } },
+        bindings: { $include: "./bindings.json5" },
+      })}\n`,
+      "utf-8",
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        entries: { ...snapshot.config.agents?.entries, research: {} },
+      },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    expect(await fs.readFile(bindingsPath, "utf-8")).toBe(bindingsRaw);
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      bindings?: { $include?: string };
+      agents?: { entries?: Record<string, unknown> };
+    };
+    expect(persisted.bindings).toEqual({ $include: "./bindings.json5" });
+    expect(persisted.agents?.entries).toMatchObject({ ops: {}, research: {} });
+  });
+
   it.each([
     { label: "marked", entry: { default: true } },
     { label: "markerless", entry: {} },
@@ -158,17 +207,30 @@ describe("default role materialization authored writes", () => {
         id: "ownerless",
         name: "ownerless",
         enabled: true,
-        createdAtMs: 1,
-        updatedAtMs: 1,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "run" },
-        state: {},
+        state: { nextRunAtMs: Date.now() + 60_000 },
       };
 
       await withEnvAsync(env, async () => {
         await saveCronJobsStore(storePath, { version: 1, jobs: [ownerlessJob] });
+        let currentDefaultAgentId: string | undefined = "ops";
+        const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+        const cron = new CronService({
+          storePath,
+          cronEnabled: true,
+          resolveDefaultAgentId: () => currentDefaultAgentId,
+          isAgentAvailable: () => true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
+        });
+        await cron.start();
         const io = createConfigIO({
           configPath,
           env,
@@ -195,43 +257,59 @@ describe("default role materialization authored writes", () => {
           },
         };
 
-        await io.writeConfigFile(nextConfig, {
-          baseSnapshot: snapshot,
-          explicitSetPaths: [["agents"]],
-          explicitSetValueSource,
-        });
+        try {
+          await io.writeConfigFile(nextConfig, {
+            baseSnapshot: snapshot,
+            explicitSetPaths: [["agents"]],
+            explicitSetValueSource,
+          });
+          currentDefaultAgentId = undefined;
+          expect(cron.getLoadedJobs()?.[0]?.agentId).toBe("ops");
+          await expect(cron.run("ownerless", "force")).resolves.toMatchObject({
+            ok: true,
+            ran: true,
+          });
+          expect(runIsolatedAgentJob).toHaveBeenCalledWith(
+            expect.objectContaining({ job: expect.objectContaining({ agentId: "ops" }) }),
+          );
 
-        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-          agents?: {
-            defaults?: {
-              heartbeat?: { agentId?: string };
-              model?: { primary?: string };
-              systemAgent?: { agentId?: string };
+          const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+            agents?: {
+              defaults?: {
+                heartbeat?: { agentId?: string };
+                model?: { primary?: string };
+                systemAgent?: { agentId?: string };
+              };
+              entries?: Record<string, { default?: boolean; workspace?: string }>;
             };
-            entries?: Record<string, { default?: boolean; workspace?: string }>;
+            bindings?: Array<{
+              agentId?: string;
+              match?: { channel?: string; accountId?: string };
+            }>;
+            plugins?: {
+              load?: { paths?: string[] };
+              entries?: Record<string, { config?: Record<string, unknown> }>;
+            };
+            talk?: { agentId?: string };
           };
-          bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
-          plugins?: {
-            load?: { paths?: string[] };
-            entries?: Record<string, { config?: Record<string, unknown> }>;
-          };
-          talk?: { agentId?: string };
-        };
-        expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
-        expect(persisted.agents?.entries?.ops?.workspace).toBe(soleWorkspace);
-        expect(persisted.plugins?.load?.paths).toContain(workspacePluginPath);
-        expect(persisted.bindings).toContainEqual({
-          agentId: "ops",
-          match: { channel: "discord", accountId: "*" },
-        });
-        expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
-        expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("ops");
-        expect(persisted.talk?.agentId).toBe("ops");
-        expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
-        expect(persisted.agents?.defaults?.model?.primary).toBe("openai/gpt-5.5");
-        expect(
-          (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
-        ).toBe("ops");
+          expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+          expect(persisted.agents?.entries?.ops?.workspace).toBe(soleWorkspace);
+          expect(persisted.plugins?.load?.paths).toContain(workspacePluginPath);
+          expect(persisted.bindings).toContainEqual({
+            agentId: "ops",
+            match: { channel: "discord", accountId: "*" },
+          });
+          expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+          expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("ops");
+          expect(persisted.talk?.agentId).toBe("ops");
+          expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
+          expect(persisted.agents?.defaults?.model?.primary).toBe("openai/gpt-5.5");
+          expect(
+            (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
+          ).toBe("ops");
+        } finally {
+          cron.stop();
+        }
       });
     },
   );

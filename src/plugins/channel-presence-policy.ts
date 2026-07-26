@@ -448,6 +448,31 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   return entries;
 }
 
+/**
+ * Lists channels the Gateway activation policy considers effective.
+ * This is the shared source for startup plugin loading and legacy-owner materialization.
+ */
+export function listGatewayActivatedChannelIds(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  return resolveConfiguredChannelPresencePolicy({
+    ...params,
+    includePersistedAuthState: true,
+  })
+    .filter(
+      (entry) =>
+        entry.effective ||
+        // Ambient credentials are the activation signal that promotes a bundled
+        // disabled-by-default owner; keep startup and ownership migration aligned.
+        (entry.blockedReasons.length > 0 &&
+          entry.blockedReasons.every((reason) => reason === "bundled-disabled-by-default")),
+    )
+    .map((entry) => entry.channelId);
+}
+
 /** Lists channels that suppression removes because their only presence is ambient env. */
 export function listAmbientOnlyConfiguredChannelIds(
   params: Omit<Parameters<typeof resolveConfiguredChannelPresencePolicy>[0], "ambientEnvTriggers">,

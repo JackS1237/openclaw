@@ -2,6 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { materializeLegacyDefaultCronJobOwners } from "../cron/legacy-default-agent-owner-migration.js";
+import { beginLegacyDefaultOwnerHandoff } from "../cron/live-service-registry.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -82,7 +83,7 @@ import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import {
-  materializeLegacyAgentOwnershipForActiveChannels,
+  materializeLegacyAgentOwnershipForActiveChannelsResult,
   validateConfigObjectRawWithPlugins,
 } from "./validation.js";
 
@@ -158,11 +159,26 @@ export async function writeConfigFileFromContext(
   // Retired marker ownership comes from raw input; markerless sole-to-fleet
   // writes have one equally unambiguous previous owner. cron.store is also
   // raw-only, so the snapshot remains authoritative until this handoff commits.
-  const retainedLegacyDefaultAgentId = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
-    .map(
-      (source) => migratePersistedImplicitMainRoster(source, deps.env).retainedLegacyDefaultAgentId,
-    )
+  const sourceRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].map(
+    (source) => migratePersistedImplicitMainRoster(source, deps.env),
+  );
+  const retainedLegacyDefaultAgentId = sourceRosterMigrations
+    .map((migration) => migration.retainedLegacyDefaultAgentId)
     .find((agentId) => agentId !== undefined);
+  const legacySourceInsertedPaths = retainedLegacyDefaultAgentId
+    ? (sourceRosterMigrations
+        .filter(
+          (migration) => migration.retainedLegacyDefaultAgentId === retainedLegacyDefaultAgentId,
+        )
+        .map((migration) =>
+          materializeLegacyAgentOwnershipForActiveChannelsResult(
+            migration.config as OpenClawConfig,
+            retainedLegacyDefaultAgentId,
+            deps.env,
+          ),
+        )
+        .find((materialized) => materialized.insertedPaths.length > 0)?.insertedPaths ?? [])
+    : [];
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const nextAgentEntries = listAgentEntries(nextConfig);
   const nextAgentIds = new Set(nextAgentEntries.map((entry) => normalizeAgentId(entry.id)));
@@ -177,32 +193,26 @@ export async function writeConfigFileFromContext(
         agentId: previousSoleAgentId,
         env: deps.env,
       })
-    : { config: nextConfig };
+    : { config: nextConfig, insertedPaths: [] as string[][] };
   nextConfig = workspacePin.config;
+  let transitionInsertedPaths = workspacePin.insertedPaths;
   if (crossesIntoMultiAgent) {
-    nextConfig = materializeLegacyAgentOwnershipForActiveChannels(
+    const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
       nextConfig,
       previousSoleAgentId,
       deps.env,
     );
+    nextConfig = materialized.config;
+    transitionInsertedPaths = [...transitionInsertedPaths, ...materialized.insertedPaths];
   }
-  const topologyOwnershipPaths: string[][] = crossesIntoMultiAgent
+  const topologyOwnershipPaths = crossesIntoMultiAgent
     ? [
-        ...(workspacePin.workspace
-          ? [["agents", "entries", normalizeAgentId(previousSoleAgentId), "workspace"]]
-          : []),
-        ...(workspacePin.pluginPath ? [["plugins", "load", "paths"]] : []),
-        ...(Array.isArray(nextConfig.bindings) ? [["bindings"]] : []),
-        ...(nextConfig.agents?.defaults?.heartbeat?.agentId
-          ? [["agents", "defaults", "heartbeat", "agentId"]]
-          : []),
-        ...(nextConfig.agents?.defaults?.systemAgent?.agentId
-          ? [["agents", "defaults", "systemAgent", "agentId"]]
-          : []),
-        ...(nextConfig.talk?.agentId ? [["talk", "agentId"]] : []),
-        ...(typeof nextConfig.plugins?.entries?.["voice-call"]?.config?.agentId === "string"
-          ? [["plugins", "entries", "voice-call", "config", "agentId"]]
-          : []),
+        ...new Map(
+          [...legacySourceInsertedPaths, ...transitionInsertedPaths].map((ownershipPath) => [
+            ownershipPath.join("\0"),
+            ownershipPath,
+          ]),
+        ).values(),
       ]
     : [];
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyOwnershipPaths];
@@ -212,18 +222,9 @@ export async function writeConfigFileFromContext(
       : crossesIntoMultiAgent
         ? previousSoleAgentId
         : undefined;
-  if (cronHandoffAgentId) {
-    const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
-      storePath: resolveCronJobsStorePathFromConfig(snapshot.config, deps.env),
-      legacyDefaultAgentId: cronHandoffAgentId,
-      env: deps.env,
-    });
-    if (cronOwnerMigration.warnings.length > 0) {
-      throw new Error(
-        `Config write refused before retired default ownership was durable: ${cronOwnerMigration.warnings.join(" ")}`,
-      );
-    }
-  }
+  const cronHandoffStorePath = cronHandoffAgentId
+    ? resolveCronJobsStorePathFromConfig(snapshot.config, deps.env)
+    : undefined;
   persistCandidate = nextConfig;
   let explicitSetValueSource: unknown = options.explicitSetValueSource ?? nextConfig;
   for (const ownershipPath of topologyOwnershipPaths) {
@@ -533,7 +534,30 @@ export async function writeConfigFileFromContext(
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
+  let liveCronHandoff: ReturnType<typeof beginLegacyDefaultOwnerHandoff> | undefined;
   try {
+    if (cronHandoffAgentId && cronHandoffStorePath) {
+      liveCronHandoff = beginLegacyDefaultOwnerHandoff({
+        storePath: cronHandoffStorePath,
+        legacyDefaultAgentId: cronHandoffAgentId,
+      });
+      const liveCronOwnerMigration = await liveCronHandoff.drainAndSeal();
+      if (liveCronOwnerMigration.warnings.length > 0) {
+        throw new Error(
+          `Config write refused before live cron ownership was durable: ${liveCronOwnerMigration.warnings.join(" ")}`,
+        );
+      }
+      const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
+        storePath: cronHandoffStorePath,
+        legacyDefaultAgentId: cronHandoffAgentId,
+        env: deps.env,
+      });
+      if (cronOwnerMigration.warnings.length > 0) {
+        throw new Error(
+          `Config write refused before retired default ownership was durable: ${cronOwnerMigration.warnings.join(" ")}`,
+        );
+      }
+    }
     const result = await replaceFileAtomic({
       filePath: configPath,
       content: json,
@@ -666,5 +690,7 @@ export async function writeConfigFileFromContext(
   } catch (error) {
     await appendWriteAudit("failed", error);
     throw error;
+  } finally {
+    liveCronHandoff?.release();
   }
 }
