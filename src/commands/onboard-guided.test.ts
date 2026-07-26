@@ -9,6 +9,7 @@ import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { EnsureOnboardingAgentParams as AgentParams } from "./onboard-agent.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
 
@@ -50,7 +51,7 @@ const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-")
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
 vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  ensureOnboardingAgent: async ({ config }: AgentParams) => ({ config, agentId: "main" }),
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -583,8 +584,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    // Only the existing model was auto-tested; the other credentialed candidate
-    // must not run (and persist) without the user choosing it.
+    // Only the existing model was auto-tested; another candidate must not persist without a choice.
     expect(activate).toHaveBeenCalledTimes(2);
     expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
       "existing-model",
@@ -905,6 +905,7 @@ describe("runGuidedOnboarding", () => {
     expect(text).not.toHaveBeenCalled();
     expect(deps.applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
+      targetAgentId: "main",
       surface: "cli",
       runtime,
     });
@@ -1073,9 +1074,8 @@ describe("runGuidedOnboarding", () => {
       },
       runtime,
       {
-        callGateway: gatewayCallMock as unknown as NonNullable<
-          RemoteGatewayInferenceOnboardingDeps["callGateway"]
-        >,
+        callGateway:
+          gatewayCallMock as unknown as RemoteGatewayInferenceOnboardingDeps["callGateway"],
         createPrompter: () => prompter,
         runTui,
       },

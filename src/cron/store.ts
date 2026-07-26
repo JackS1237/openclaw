@@ -74,10 +74,13 @@ export function resolveCronJobsStorePathFromConfig(
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
-export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
+export async function loadCronJobsStoreWithConfigJobs(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LoadedCronStore> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
+  const database = openOpenClawStateDatabase({ env }).db;
   const rows = loadCronRows(database, storeKey);
   if (rows.length > 0) {
     return loadedCronStoreFromRows(rows);
@@ -154,6 +157,7 @@ export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
 
 type SaveCronStoreOptions = {
   stateOnly?: boolean;
+  env?: NodeJS.ProcessEnv;
 };
 
 async function atomicWrite(filePath: string, content: string, dirMode = 0o700): Promise<void> {
@@ -179,15 +183,21 @@ export async function saveCronJobsStore(
   if (opts?.stateOnly) {
     // Hot-path timer updates only mutate runtime columns; full config JSON stays
     // untouched so user-authored cron definitions do not churn.
-    runOpenClawStateWriteTransaction(({ db }) => {
-      updateCronRuntimeRows(db, storeKey, store);
-    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        updateCronRuntimeRows(db, storeKey, store);
+      },
+      { env: opts?.env },
+    );
     return;
   }
   assertCronStoreCanPersist(store);
-  runOpenClawStateWriteTransaction(({ db }) => {
-    replaceCronRows(db, storeKey, store);
-  });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      replaceCronRows(db, storeKey, store);
+    },
+    { env: opts?.env },
+  );
 }
 
 /** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
@@ -195,17 +205,46 @@ export async function saveCronJobsStoreWithMetadata(
   storePath: string,
   store: CronStoreFile,
   acquireMetadata: (db: DatabaseSync) => boolean,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   assertCronStoreCanPersist(store);
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    if (!acquireMetadata(db)) {
-      return false;
-    }
-    replaceCronRows(db, storeKey, store);
-    return true;
-  });
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (!acquireMetadata(db)) {
+        return false;
+      }
+      replaceCronRows(db, storeKey, store);
+      return true;
+    },
+    { env },
+  );
+}
+
+/** Transforms the latest canonical cron rows while atomically acquiring migration metadata. */
+export async function transformCronJobsStoreWithMetadata(
+  storePath: string,
+  transform: (loaded: LoadedCronStore) => CronStoreFile,
+  acquireMetadata: (db: DatabaseSync) => boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const rows = loadCronRows(db, storeKey);
+      const loaded = rows.length > 0 ? loadedCronStoreFromRows(rows) : emptyLoadedCronStore();
+      if (!acquireMetadata(db)) {
+        return false;
+      }
+      const next = transform(loaded);
+      assertCronStoreCanPersist(next);
+      replaceCronRows(db, storeKey, next);
+      return true;
+    },
+    { env },
+  );
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.

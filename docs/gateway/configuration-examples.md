@@ -210,6 +210,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
   // Agent runtime
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       userTimezone: "America/Chicago",
@@ -481,6 +482,7 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       workspace: "~/.openclaw/workspace",
       skills: ["github", "weather"],

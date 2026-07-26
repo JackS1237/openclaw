@@ -494,6 +494,7 @@ Keep Claude as the default agent and add a named Codex agent:
     },
   },
   agents: {
+    ownership: "explicit",
     defaults: {
       model: "anthropic/claude-opus-4-6",
     },

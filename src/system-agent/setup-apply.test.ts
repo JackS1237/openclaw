@@ -483,14 +483,14 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
   });
 
-  it("keeps the fleet workspace and provisions the configured default agent", async () => {
+  it("keeps the fleet workspace and provisions the explicit target agent", async () => {
     const config = {
       agents: {
+        ownership: "explicit" as const,
         defaults: { workspace: "/tmp/current-workspace" },
         entries: {
           main: {},
           ops: {
-            default: true,
             agentDir: "/agents/ops",
             workspace: "/tmp/ops-workspace",
           },
@@ -504,6 +504,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await applySystemAgentSetup(
       baseParams({
         workspace: "/tmp/requested-workspace",
+        targetAgentId: "ops",
         configPatch: {
           agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
         },

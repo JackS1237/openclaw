@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn(),
@@ -105,5 +106,60 @@ describe("onboarding main-agent creation", () => {
 
     expect(result.configHash).toBeUndefined();
     expect(mocks.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicit agent for a preserved multi-agent roster", async () => {
+    const result = await ensureOnboardingAgent({
+      config: { agents: { entries: { ops: {}, research: {} } } },
+      workspace: "/tmp/work",
+      preserveCandidateRoster: true,
+      agentId: "research",
+      runtime: defaultRuntime,
+      selectionDeps: { interactive: false },
+    });
+
+    expect(result.agentId).toBe("research");
+    expect(result.config.agents?.ownership).toBe("explicit");
+  });
+
+  it("prompts for a preserved multi-agent roster in interactive mode", async () => {
+    const selectAgent = vi.fn(async () => "research");
+    const result = await ensureOnboardingAgent({
+      config: {
+        agents: {
+          entries: { ops: { name: "Operations" }, research: { name: "Research" } },
+        },
+      },
+      workspace: "/tmp/work",
+      preserveCandidateRoster: true,
+      runtime: defaultRuntime,
+      selectionDeps: { interactive: true, selectAgent },
+    });
+
+    expect(result.agentId).toBe("research");
+    expect(selectAgent).toHaveBeenCalledWith({
+      message: "Select an agent for onboarding",
+      options: [
+        { value: "ops", label: "Operations (ops)" },
+        { value: "research", label: "Research (research)" },
+      ],
+    });
+  });
+
+  it("fails non-interactive multi-agent onboarding with an actionable typed error", async () => {
+    await expect(
+      ensureOnboardingAgent({
+        config: { agents: { entries: { ops: {}, research: {} } } },
+        workspace: "/tmp/work",
+        preserveCandidateRoster: true,
+        runtime: defaultRuntime,
+        selectionDeps: { interactive: false },
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+      surface: "onboarding",
+      hint: expect.stringContaining("--agent <id>"),
+    });
   });
 });

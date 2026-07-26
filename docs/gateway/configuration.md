@@ -232,6 +232,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
+        ownership: "explicit",
         defaults: {
           skills: ["github", "weather"],
         },
@@ -463,6 +464,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
+        ownership: "explicit",
         entries: {
           home: { workspace: "~/.openclaw/workspace-home" },
           work: { workspace: "~/.openclaw/workspace-work" },

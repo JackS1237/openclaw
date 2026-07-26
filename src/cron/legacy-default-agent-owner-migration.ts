@@ -18,6 +18,7 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
   legacyDefaultAgentId: string;
   records?: Array<Record<string, unknown>>;
   env?: NodeJS.ProcessEnv;
+  persistRecords?: (records: Array<Record<string, unknown>>) => Promise<void>;
 }): Promise<LegacyDefaultCronOwnerMigrationResult> {
   const agentId = normalizeAgentId(params.legacyDefaultAgentId);
   try {
@@ -34,11 +35,17 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
             ),
           { env: params.env },
         );
-    if (rewritten > 0 && params.records) {
-      await saveCronJobsStore(params.storePath, {
-        version: 1,
-        jobs: params.records as unknown as CronJob[],
-      });
+    if (params.records && params.persistRecords) {
+      await params.persistRecords(params.records);
+    } else if (rewritten > 0 && params.records) {
+      await saveCronJobsStore(
+        params.storePath,
+        {
+          version: 1,
+          jobs: params.records as unknown as CronJob[],
+        },
+        { env: params.env },
+      );
     }
     return rewritten > 0
       ? {

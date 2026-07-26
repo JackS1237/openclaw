@@ -35,6 +35,8 @@ import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js
  */
 export type SystemAgentSetupApplyParams = {
   workspace: string;
+  /** Explicit agent that owns setup model, workspace, and bootstrap effects. */
+  targetAgentId?: string;
   /** Explicit interactive approval to replace an existing fleet workspace root. */
   allowWorkspaceChange?: boolean;
   model?: string;
@@ -265,6 +267,7 @@ export async function applySystemAgentSetup(
 ): Promise<SystemAgentSetupApplyResult> {
   const {
     workspace,
+    targetAgentId,
     model,
     agentRuntimeId,
     authProfileId,
@@ -438,6 +441,7 @@ export async function applySystemAgentSetup(
       candidate = await applySystemAgentModelSelection({
         config: candidate,
         model,
+        ...(targetAgentId ? { targetAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(authProfileId ? { authProfileId } : {}),
       });
@@ -516,7 +520,7 @@ export async function applySystemAgentSetup(
   if (!settings) {
     throw new Error("OpenClaw setup committed without resolved Gateway settings.");
   }
-  const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  const onboardingTarget = resolveOnboardingAgentTarget(nextConfig, targetAgentId);
   const effectiveWorkspace = onboardingTarget.workspaceDir;
   if (params.expectedInferenceRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
@@ -571,8 +575,7 @@ export async function applySystemAgentSetup(
     }
   };
 
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
-  const effectiveAgentId = resolveDefaultAgentId(nextConfig);
+  const effectiveAgentId = onboardingTarget.agentId;
   const workspaceResult = await runCommittedFollowUp(
     async () =>
       await onboardHelpers.ensureWorkspaceAndSessions(effectiveWorkspace, runtime, {

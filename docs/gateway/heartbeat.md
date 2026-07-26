@@ -145,6 +145,7 @@ Example: two agents, only the second agent runs heartbeats.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       heartbeat: {
         every: "30m",

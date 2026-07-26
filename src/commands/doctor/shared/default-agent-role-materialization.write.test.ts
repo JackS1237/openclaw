@@ -11,6 +11,8 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { loadLegacyCronStoreForMigration } from "../cron/legacy-store-migration.js";
+import { hasLegacyCronMigrationReceiptReadOnly } from "../cron/migration-ledger.js";
 
 const roots: string[] = [];
 
@@ -452,12 +454,85 @@ describe("default role materialization authored writes", () => {
       });
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        agents?: { entries?: Record<string, unknown> };
+        agents?: { ownership?: string; entries?: Record<string, unknown> };
       };
+      expect(persisted.agents?.ownership).toBe("explicit");
       expect(persisted.agents?.entries).toEqual({ research: {}, writer: {} });
       expect(
         (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env)).store.jobs[0]?.agentId,
       ).toBeUndefined();
     });
+  });
+
+  it("imports an offline legacy JSON cron store before a sole-to-fleet commit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-json-cron-owner-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state-root"),
+      OPENCLAW_TEST_FAST: "1",
+    } as NodeJS.ProcessEnv;
+    const storePath = resolveCronJobsStorePath(undefined, env);
+    const ownerlessJob: CronJob = {
+      id: "legacy-json-ownerless",
+      name: "legacy JSON ownerless",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: {},
+    };
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ agents: { entries: { ops: {} } } })}\n`,
+      "utf-8",
+    );
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await saveCronJobsStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [{ ...ownerlessJob, id: "canonical-owned", agentId: "research" }],
+      },
+      { env },
+    );
+    await fs.writeFile(storePath, JSON.stringify([ownerlessJob]), "utf-8");
+
+    const io = createConfigIO({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        entries: { ...snapshot.config.agents?.entries, research: {} },
+      },
+    };
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"]],
+      explicitSetValueSource: nextConfig,
+    });
+
+    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
+    expect(loaded.store.jobs).toContainEqual(
+      expect.objectContaining({ id: "legacy-json-ownerless", agentId: "ops" }),
+    );
+    expect(loaded.store.jobs).toContainEqual(
+      expect.objectContaining({ id: "canonical-owned", agentId: "research" }),
+    );
+    const source = (await loadLegacyCronStoreForMigration(storePath)).migrationSource;
+    expect(source).toBeDefined();
+    expect(hasLegacyCronMigrationReceiptReadOnly(source!, env)).toBe(true);
   });
 });

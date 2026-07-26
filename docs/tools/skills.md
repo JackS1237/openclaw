@@ -98,6 +98,7 @@ regardless of where they are loaded from.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },

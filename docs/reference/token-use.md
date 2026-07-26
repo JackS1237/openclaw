@@ -233,6 +233,7 @@ agents:
 
 ```yaml
 agents:
+  ownership: "explicit"
   defaults:
     model:
       primary: "anthropic/claude-opus-4-6"

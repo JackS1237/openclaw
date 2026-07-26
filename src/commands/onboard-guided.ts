@@ -441,7 +441,13 @@ async function runGuidedOnboardingFlow(
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
     // Only fresh-file creation is a side effect here. Pre-roster authored persistence
     // remains doctor-owned; the injected main roster is intentionally not flattened.
-    await ensureOnboardingAgent({ config: existingConfig, workspace, baseConfig: existingConfig });
+    const onboardingAgent = await ensureOnboardingAgent({
+      config: existingConfig,
+      workspace,
+      baseConfig: existingConfig,
+      agentId: opts.agent,
+      runtime,
+    });
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
@@ -449,6 +455,7 @@ async function runGuidedOnboardingFlow(
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
           workspace,
+          targetAgentId: onboardingAgent.agentId,
           ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
           surface: "cli",
           runtime,

@@ -252,6 +252,7 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
     entries: {
       main: {
         subagents: { allowAgents: ["worker"] },

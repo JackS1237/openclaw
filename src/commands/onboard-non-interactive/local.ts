@@ -201,7 +201,7 @@ export async function runNonInteractiveLocalSetup(params: {
   }
   // Workspace defaults are already staged above; provider discovery must use
   // that requested owner before first-agent creation is allowed to write.
-  const authTarget = resolveOnboardingAgentTarget(nextConfig);
+  const authTarget = resolveOnboardingAgentTarget(nextConfig, opts.agent);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
@@ -266,6 +266,9 @@ export async function runNonInteractiveLocalSetup(params: {
     config: nextConfig,
     workspace: workspaceDir,
     baseConfig,
+    agentId: opts.agent,
+    runtime,
+    selectionDeps: { interactive: false },
   });
   nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
   // First-agent creation is the first permitted config mutation. Preserve its
@@ -284,7 +287,7 @@ export async function runNonInteractiveLocalSetup(params: {
   });
   logConfigUpdated(runtime);
 
-  const finalTarget = resolveOnboardingAgentTarget(nextConfig);
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig, created.agentId);
   await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,

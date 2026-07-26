@@ -1,7 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { materializeLegacyDefaultCronJobOwners } from "../cron/legacy-default-agent-owner-migration.js";
 import { beginLegacyDefaultOwnerHandoff } from "../cron/live-service-registry.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
@@ -180,25 +179,31 @@ export async function writeConfigFileFromContext(
         .find((materialized) => materialized.insertedPaths.length > 0)?.insertedPaths ?? [])
     : [];
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
+  const previousAgentCount = listAgentEntries(snapshot.config).length;
   const nextAgentEntries = listAgentEntries(nextConfig);
   const nextAgentIds = new Set(nextAgentEntries.map((entry) => normalizeAgentId(entry.id)));
+  // Generation is independent from handoff: a removed sole agent cannot grant
+  // ownership to its replacements, and the new fleet must fail closed instead of falling back.
+  const entersMultiAgent = previousAgentCount <= 1 && nextAgentEntries.length > 1;
   const previousSoleRemains =
     previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
-  const crossesIntoMultiAgent =
-    previousSoleAgentId !== undefined && previousSoleRemains && nextAgentEntries.length > 1;
+  const previousSoleHandoffAgentId =
+    entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined;
+  const shouldStampOwnershipGeneration =
+    entersMultiAgent && nextConfig.agents?.ownership === undefined;
   const ownershipGenerationInserted =
-    crossesIntoMultiAgent && snapshot.config.agents?.ownership !== "explicit";
-  if (crossesIntoMultiAgent && nextConfig.agents?.ownership !== "explicit") {
+    shouldStampOwnershipGeneration && snapshot.config.agents?.ownership !== "explicit";
+  if (shouldStampOwnershipGeneration) {
     nextConfig = {
       ...nextConfig,
       agents: { ...nextConfig.agents, ownership: "explicit" },
     };
   }
-  const workspacePin = crossesIntoMultiAgent
+  const workspacePin = previousSoleHandoffAgentId
     ? pinSoleAgentWorkspaceForFleetExpansion({
         sourceConfig: snapshot.config,
         targetConfig: nextConfig,
-        agentId: previousSoleAgentId,
+        agentId: previousSoleHandoffAgentId,
         env: deps.env,
       })
     : { config: nextConfig, insertedPaths: [] as string[][] };
@@ -207,16 +212,16 @@ export async function writeConfigFileFromContext(
     ...workspacePin.insertedPaths,
     ...(ownershipGenerationInserted ? [["agents", "ownership"]] : []),
   ];
-  if (crossesIntoMultiAgent) {
+  if (previousSoleHandoffAgentId) {
     const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
       nextConfig,
-      previousSoleAgentId,
+      previousSoleHandoffAgentId,
       deps.env,
     );
     nextConfig = materialized.config;
     transitionInsertedPaths = [...transitionInsertedPaths, ...materialized.insertedPaths];
   }
-  const topologyOwnershipPaths = crossesIntoMultiAgent
+  const topologyOwnershipPaths = entersMultiAgent
     ? [
         ...new Map(
           [...legacySourceInsertedPaths, ...transitionInsertedPaths].map((ownershipPath) => [
@@ -230,8 +235,8 @@ export async function writeConfigFileFromContext(
   const cronHandoffAgentId =
     retainedLegacyDefaultAgentId && nextAgentIds.has(normalizeAgentId(retainedLegacyDefaultAgentId))
       ? retainedLegacyDefaultAgentId
-      : crossesIntoMultiAgent
-        ? previousSoleAgentId
+      : previousSoleHandoffAgentId
+        ? previousSoleHandoffAgentId
         : undefined;
   const cronHandoffStorePath = cronHandoffAgentId
     ? resolveCronJobsStorePathFromConfig(snapshot.config, deps.env)
@@ -558,10 +563,15 @@ export async function writeConfigFileFromContext(
           `Config write refused before live cron ownership was durable: ${liveCronOwnerMigration.warnings.join(" ")}`,
         );
       }
-      const cronOwnerMigration = await materializeLegacyDefaultCronJobOwners({
+      // The doctor loader merges canonical rows, config projections, and any
+      // unimported legacy JSON before the topology commit retires this owner.
+      const { materializeLegacyDefaultCronJobOwners: materializeMergedCronOwners } =
+        await import("../commands/doctor/cron/legacy-repair.js");
+      const cronOwnerMigration = await materializeMergedCronOwners({
+        cfg: snapshot.config,
         storePath: cronHandoffStorePath,
-        legacyDefaultAgentId: cronHandoffAgentId,
         env: deps.env,
+        legacyDefaultAgentId: cronHandoffAgentId,
       });
       if (cronOwnerMigration.warnings.length > 0) {
         throw new Error(

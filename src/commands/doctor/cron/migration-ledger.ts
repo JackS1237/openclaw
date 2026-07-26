@@ -35,8 +35,11 @@ function hasLegacyCronMigrationReceiptInDatabase(
   return row?.status === "completed";
 }
 
-export function hasLegacyCronMigrationReceipt(source: LegacyCronMigrationSource): boolean {
-  return hasLegacyCronMigrationReceiptInDatabase(openOpenClawStateDatabase().db, source);
+export function hasLegacyCronMigrationReceipt(
+  source: LegacyCronMigrationSource,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return hasLegacyCronMigrationReceiptInDatabase(openOpenClawStateDatabase({ env }).db, source);
 }
 
 function tableExists(db: DatabaseSync, tableName: string): boolean {
@@ -47,8 +50,11 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   );
 }
 
-export function hasLegacyCronMigrationReceiptReadOnly(source: LegacyCronMigrationSource): boolean {
-  const statePath = resolveOpenClawStateSqlitePath(process.env);
+export function hasLegacyCronMigrationReceiptReadOnly(
+  source: LegacyCronMigrationSource,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
     return false;
   }

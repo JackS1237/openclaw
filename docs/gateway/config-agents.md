@@ -73,6 +73,7 @@ Optional default skill allowlist for agents that do not set
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: { skills: ["github", "weather"] },
     list: [
       { id: "writer" }, // inherits github, weather
@@ -1088,6 +1089,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       heartbeat: { agentId: "home" },
       systemAgent: { agentId: "home" },
