@@ -1,5 +1,9 @@
 // Voice Call plugin module implements runtime behavior.
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -332,6 +336,13 @@ export async function createVoiceCallRuntime(params: {
         surface: "voice-call relay ownership",
         hint: "Set the voice-call plugin agentId target.",
       });
+  const configuredAgentIds = listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId));
+  if (!configuredAgentIds.includes(configuredAgentId)) {
+    throw new AgentSelectionRequiredError(configuredAgentIds, {
+      surface: "voice-call relay ownership",
+      hint: `Set the voice-call plugin agentId target to one of: ${configuredAgentIds.join(", ")}.`,
+    });
+  }
   const config = { ...unresolvedConfig, agentId: configuredAgentId };
 
   if (config.skipSignatureVerification) {

@@ -1,6 +1,12 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import {
+  computeJobNextRunAtMs,
+  hasScheduledNextRunAtMs,
+  isJobEnabled,
+  nextWakeAtMs,
+  recomputeNextRunsForMaintenance,
+} from "./jobs.js";
 import { acquireCronOperationLock, locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
@@ -44,9 +50,26 @@ export async function beginLegacyDefaultAgentOwnerHandoff(
   }
 }
 
-/** Reloads one follower while the registry's single store-wide handoff lock is held. */
+/** Reloads one sealed service and schedules only jobs newly imported during the handoff. */
 export async function refreshLegacyDefaultAgentOwnerHandoff(state: CronServiceState) {
+  const previousJobIds = new Set(state.store?.jobs.map((job) => job.id) ?? []);
   await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+  let scheduledNewJob = false;
+  for (const job of state.store?.jobs ?? []) {
+    if (
+      previousJobIds.has(job.id) ||
+      !isJobEnabled(job) ||
+      hasScheduledNextRunAtMs(job.state.nextRunAtMs)
+    ) {
+      continue;
+    }
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, state.deps.nowMs());
+    scheduledNewJob = true;
+  }
+  if (scheduledNewJob) {
+    await persist(state, { stateOnly: true });
+  }
+  armTimer(state);
 }
 
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
@@ -74,6 +97,7 @@ export async function start(state: CronServiceState) {
       for (const change of migration.changes) {
         state.deps.log.info({ storePath: state.deps.storePath }, `cron: ${change}`);
       }
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     }
     if (state.stopped) {
       return;

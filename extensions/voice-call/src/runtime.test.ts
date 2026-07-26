@@ -271,6 +271,26 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).rejects.toThrow("Voice call disabled");
   });
 
+  it("rejects a configured agentId that is absent from the roster", async () => {
+    const config = createBaseConfig();
+    config.agentId = "stale-agent";
+
+    await expect(
+      createVoiceCallRuntime({
+        config,
+        coreConfig: {},
+        fullConfig: { agents: { entries: { ops: {}, research: {} } } },
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+      agentIds: ["ops", "research"],
+      surface: "voice-call relay ownership",
+    });
+    expect(mocks.managerInitialize).not.toHaveBeenCalled();
+  });
+
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({

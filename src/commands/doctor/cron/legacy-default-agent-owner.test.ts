@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { tryGetLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { materializeLegacyDefaultCronJobOwners as materializeLatestCronOwners } from "../../../cron/legacy-default-agent-owner-migration.js";
 import { CronService } from "../../../cron/service.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly, saveCronJobsStore } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
@@ -60,6 +61,34 @@ describe("legacy default cron ownership", () => {
     ).resolves.toMatchObject({ changes: [] });
   });
 
+  it("preserves a commit interleaved after a record snapshot was loaded", async () => {
+    const root = tempDirs.make("openclaw-cron-owner-interleaved-");
+    const storePath = path.join(root, "cron.sqlite");
+    const staleRecords = [legacyJob("ownerless")] as unknown as Array<Record<string, unknown>>;
+    await saveCronJobsStore(storePath, {
+      version: 1,
+      jobs: [legacyJob("ownerless"), { ...legacyJob("concurrent"), agentId: "research" }],
+    });
+
+    await expect(
+      materializeLatestCronOwners({
+        storePath,
+        legacyDefaultAgentId: "ops",
+        records: staleRecords,
+      }),
+    ).resolves.toMatchObject({ warnings: [] });
+
+    expect(
+      (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs.map((job) => [
+        job.id,
+        job.agentId,
+      ]),
+    ).toEqual([
+      ["ownerless", "ops"],
+      ["concurrent", "research"],
+    ]);
+  });
+
   it("migrates an ownerless row before normal scheduler startup without Doctor", async () => {
     const root = tempDirs.make("openclaw-cron-owner-startup-");
     const storePath = path.join(root, "cron.sqlite");
@@ -80,6 +109,17 @@ describe("legacy default cron ownership", () => {
 
     try {
       await cron.start();
+      await expect(
+        cron.add({
+          name: "first post-migration add",
+          enabled: true,
+          agentId: "ops",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "new" },
+        }),
+      ).resolves.toMatchObject({ agentId: "ops" });
       await expect(cron.run("ownerless", "force")).resolves.toMatchObject({ ok: true, ran: true });
       expect(runIsolatedAgentJob).toHaveBeenCalledWith(
         expect.objectContaining({ job: expect.objectContaining({ agentId: "ops" }) }),

@@ -502,37 +502,61 @@ describe("default role materialization authored writes", () => {
     );
     await fs.writeFile(storePath, JSON.stringify([ownerlessJob]), "utf-8");
 
-    const io = createConfigIO({
-      configPath,
-      env,
-      homedir: () => root,
-      observe: false,
-      logger: { warn: () => {}, error: () => {} },
-    });
-    const snapshot = await io.readConfigFileSnapshot();
-    const nextConfig = {
-      ...snapshot.config,
-      agents: {
-        ...snapshot.config.agents,
-        entries: { ...snapshot.config.agents?.entries, research: {} },
-      },
-    };
+    await withEnvAsync(env, async () => {
+      const cron = new CronService({
+        storePath,
+        cronEnabled: true,
+        resolveDefaultAgentId: () => "ops",
+        isAgentAvailable: () => true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      await cron.start();
+      try {
+        const io = createConfigIO({
+          configPath,
+          env,
+          homedir: () => root,
+          observe: false,
+          logger: { warn: () => {}, error: () => {} },
+        });
+        const snapshot = await io.readConfigFileSnapshot();
+        const nextConfig = {
+          ...snapshot.config,
+          agents: {
+            ...snapshot.config.agents,
+            entries: { ...snapshot.config.agents?.entries, research: {} },
+          },
+        };
 
-    await io.writeConfigFile(nextConfig, {
-      baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "entries"]],
-      explicitSetValueSource: nextConfig,
-    });
+        await io.writeConfigFile(nextConfig, {
+          baseSnapshot: snapshot,
+          explicitSetPaths: [["agents", "entries"]],
+          explicitSetValueSource: nextConfig,
+        });
 
-    const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
-    expect(loaded.store.jobs).toContainEqual(
-      expect.objectContaining({ id: "legacy-json-ownerless", agentId: "ops" }),
-    );
-    expect(loaded.store.jobs).toContainEqual(
-      expect.objectContaining({ id: "canonical-owned", agentId: "research" }),
-    );
-    const source = (await loadLegacyCronStoreForMigration(storePath)).migrationSource;
-    expect(source).toBeDefined();
-    expect(hasLegacyCronMigrationReceiptReadOnly(source!, env)).toBe(true);
+        const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
+        expect(loaded.store.jobs).toContainEqual(
+          expect.objectContaining({ id: "legacy-json-ownerless", agentId: "ops" }),
+        );
+        expect(loaded.store.jobs).toContainEqual(
+          expect.objectContaining({ id: "canonical-owned", agentId: "research" }),
+        );
+        expect(cron.getLoadedJobs()).toContainEqual(
+          expect.objectContaining({
+            id: "legacy-json-ownerless",
+            agentId: "ops",
+            state: expect.objectContaining({ nextRunAtMs: expect.any(Number) }),
+          }),
+        );
+        const source = (await loadLegacyCronStoreForMigration(storePath)).migrationSource;
+        expect(source).toBeDefined();
+        expect(hasLegacyCronMigrationReceiptReadOnly(source!, env)).toBe(true);
+      } finally {
+        cron.stop();
+      }
+    });
   });
 });

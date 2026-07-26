@@ -578,6 +578,7 @@ export async function writeConfigFileFromContext(
           `Config write refused before retired default ownership was durable: ${cronOwnerMigration.warnings.join(" ")}`,
         );
       }
+      await liveCronHandoff.refreshSealedServices();
     }
     const result = await replaceFileAtomic({
       filePath: configPath,

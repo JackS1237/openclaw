@@ -55,6 +55,7 @@ export function registerLiveCronService(
 
 export type LiveCronOwnerHandoff = {
   drainAndSeal: () => Promise<LegacyDefaultCronOwnerMigrationResult>;
+  refreshSealedServices: () => Promise<void>;
   release: () => void;
 };
 
@@ -93,6 +94,11 @@ export function beginLegacyDefaultOwnerHandoff(params: {
         followers.map((service) => service.refreshLegacyDefaultAgentOwnerHandoff()),
       );
       return result.migration;
+    },
+    refreshSealedServices: async () => {
+      await Promise.all(
+        participants.map((service) => service.refreshLegacyDefaultAgentOwnerHandoff()),
+      );
     },
     release: () => {
       if (released) {

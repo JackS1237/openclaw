@@ -102,6 +102,10 @@ describe("live cron ownership handoff", () => {
     expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
     expect(releaseStoreLock).not.toHaveBeenCalled();
 
+    await handoff.refreshSealedServices();
+    expect(leader.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
+    expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledTimes(2);
+
     handoff.release();
     expect(releaseStoreLock).toHaveBeenCalledOnce();
     leaderRegistration.unregister();
