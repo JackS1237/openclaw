@@ -1,6 +1,6 @@
 // Gateway plugin startup bootstrap.
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -129,10 +129,8 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const soleAgentId = tryResolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = soleAgentId
-    ? resolveAgentWorkspaceDir(gatewayPluginConfig, soleAgentId)
-    : resolveDefaultAgentWorkspaceDir();
+  const defaultWorkspaceDir =
+    tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig) ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined

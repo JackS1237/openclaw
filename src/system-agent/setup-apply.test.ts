@@ -520,6 +520,24 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
   });
 
+  it("rejects an ownerless workspace-only setup before persisting the candidate", async () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" })),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.events).toEqual([]);
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+    expect(mocks.ensureGatewayService).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid config before any setup mutation", async () => {
     mocks.state.initialSnapshot = {
       ...snapshot("invalid", {}),

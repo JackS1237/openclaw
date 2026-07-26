@@ -43,6 +43,7 @@ export {
   resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
+  tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
   tryResolveSoleAgentId,

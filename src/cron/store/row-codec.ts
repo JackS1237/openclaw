@@ -2,8 +2,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "../../infra/sqlite-transaction.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { materializeLegacyDefaultCronJobOwnersInRecords } from "../legacy-default-agent-owner-records.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
@@ -409,6 +413,29 @@ function writeCronStoreEpoch(db: DatabaseSync, storeKey: string, storeEpoch: num
   );
 }
 
+function incrementCronStoreEpoch(db: DatabaseSync, storeKey: string): number {
+  ensureCronStoreEpochSchema(db);
+  executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .insertInto("cron_store_epochs")
+      .values({ store_key: storeKey, store_epoch: 0 })
+      .onConflict((conflict) => conflict.column("store_key").doNothing()),
+  );
+  const row = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .updateTable("cron_store_epochs")
+      .set({ store_epoch: sql<number>`store_epoch + 1` })
+      .where("store_key", "=", storeKey)
+      .returning("store_epoch"),
+  ).rows[0];
+  if (!row) {
+    throw new Error(`failed to advance cron store epoch for ${storeKey}`);
+  }
+  return row.store_epoch;
+}
+
 export class CronStoreEpochMismatchError extends Error {
   readonly expectedEpoch: number;
   readonly actualEpoch: number;
@@ -456,31 +483,33 @@ export function materializeCronRowAgentOwners(
   storeKey: string,
   legacyDefaultAgentId: string,
 ): number {
-  let rewritten = 0;
-  for (const row of loadCronRows(db, storeKey)) {
-    const owner = { agentId: row.agent_id, sessionKey: row.session_key };
-    if (
-      materializeLegacyDefaultCronJobOwnersInRecords([owner], legacyDefaultAgentId) === 0 ||
-      typeof owner.agentId !== "string"
-    ) {
-      continue;
+  return runSqliteImmediateTransactionSync(db, () => {
+    let rewritten = 0;
+    for (const row of loadCronRows(db, storeKey)) {
+      const owner = { agentId: row.agent_id, sessionKey: row.session_key };
+      if (
+        materializeLegacyDefaultCronJobOwnersInRecords([owner], legacyDefaultAgentId) === 0 ||
+        typeof owner.agentId !== "string"
+      ) {
+        continue;
+      }
+      const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+      jobJson.agentId = owner.agentId;
+      executeSqliteQuerySync(
+        db,
+        getCronStoreKysely(db)
+          .updateTable("cron_jobs")
+          .set({ agent_id: owner.agentId, job_json: JSON.stringify(jobJson) })
+          .where("store_key", "=", storeKey)
+          .where("job_id", "=", row.job_id),
+      );
+      rewritten += 1;
     }
-    const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
-    jobJson.agentId = owner.agentId;
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .updateTable("cron_jobs")
-        .set({ agent_id: owner.agentId, job_json: JSON.stringify(jobJson) })
-        .where("store_key", "=", storeKey)
-        .where("job_id", "=", row.job_id),
-    );
-    rewritten += 1;
-  }
-  if (rewritten > 0) {
-    writeCronStoreEpoch(db, storeKey, readCronStoreEpoch(db, storeKey) + 1);
-  }
-  return rewritten;
+    if (rewritten > 0) {
+      incrementCronStoreEpoch(db, storeKey);
+    }
+    return rewritten;
+  });
 }
 
 /** Replaces all persisted cron rows for one store key from the config store snapshot. */
@@ -490,36 +519,43 @@ export function replaceCronRows(
   store: CronStoreFile,
   options?: { expectedStoreEpoch?: number; bumpStoreEpoch?: boolean },
 ): number {
-  const currentRows = loadCronRows(db, storeKey);
-  const currentStoreEpoch = readCronStoreEpoch(db, storeKey);
-  if (
-    options?.expectedStoreEpoch !== undefined &&
-    options.expectedStoreEpoch !== currentStoreEpoch
-  ) {
-    throw new CronStoreEpochMismatchError(options.expectedStoreEpoch, currentStoreEpoch);
-  }
-  const topologyChanged = !cronStoreTopologyMatches(currentRows, store);
-  const nextStoreEpoch = currentStoreEpoch + (options?.bumpStoreEpoch && topologyChanged ? 1 : 0);
-  // Persist the epoch before replacing rows so an empty partition retains the
-  // same stale-writer barrier as a nonempty one.
-  writeCronStoreEpoch(db, storeKey, nextStoreEpoch);
-  executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db).deleteFrom("cron_jobs").where("store_key", "=", storeKey),
-  );
-  for (const [index, job] of store.jobs.entries()) {
-    const normalized = normalizeCronJobForSqlite(job);
-    if (!normalized) {
-      continue;
+  return runSqliteImmediateTransactionSync(db, () => {
+    const currentRows = loadCronRows(db, storeKey);
+    const currentStoreEpoch = readCronStoreEpoch(db, storeKey);
+    if (
+      options?.expectedStoreEpoch !== undefined &&
+      options.expectedStoreEpoch !== currentStoreEpoch
+    ) {
+      throw new CronStoreEpochMismatchError(options.expectedStoreEpoch, currentStoreEpoch);
+    }
+    const topologyChanged = !cronStoreTopologyMatches(currentRows, store);
+    const nextStoreEpoch =
+      options?.bumpStoreEpoch && topologyChanged
+        ? incrementCronStoreEpoch(db, storeKey)
+        : currentStoreEpoch;
+    // Persist zero for an empty partition so it has the same stale-writer
+    // barrier as a nonempty one even before the first topology change.
+    if (nextStoreEpoch === 0) {
+      writeCronStoreEpoch(db, storeKey, nextStoreEpoch);
     }
     executeSqliteQuerySync(
       db,
-      getCronStoreKysely(db)
-        .insertInto("cron_jobs")
-        .values(bindCronJobRow(storeKey, normalized, index)),
+      getCronStoreKysely(db).deleteFrom("cron_jobs").where("store_key", "=", storeKey),
     );
-  }
-  return nextStoreEpoch;
+    for (const [index, job] of store.jobs.entries()) {
+      const normalized = normalizeCronJobForSqlite(job);
+      if (!normalized) {
+        continue;
+      }
+      executeSqliteQuerySync(
+        db,
+        getCronStoreKysely(db)
+          .insertInto("cron_jobs")
+          .values(bindCronJobRow(storeKey, normalized, index)),
+      );
+    }
+    return nextStoreEpoch;
+  });
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -528,20 +564,22 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronJob,
   sortOrder: number,
-): void {
+): number {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
-  const values = bindCronJobRow(storeKey, normalized, sortOrder);
-  executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .insertInto("cron_jobs")
-      .values(values)
-      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
-  );
-  writeCronStoreEpoch(db, storeKey, readCronStoreEpoch(db, storeKey) + 1);
+  return runSqliteImmediateTransactionSync(db, () => {
+    const values = bindCronJobRow(storeKey, normalized, sortOrder);
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .insertInto("cron_jobs")
+        .values(values)
+        .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+    );
+    return incrementCronStoreEpoch(db, storeKey);
+  });
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */

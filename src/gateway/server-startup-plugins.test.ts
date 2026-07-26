@@ -109,6 +109,8 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
   tryResolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: (cfg: OpenClawConfig) =>
+    cfg.agents?.defaults?.workspace ?? "/workspace",
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
@@ -409,6 +411,20 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       loadPluginLookUpTable,
     );
     expect(lookupInput.workerProviderIds).toEqual(["static-ssh"]);
+  });
+
+  it("uses a multi-agent fleet workspace for startup plugin discovery", async () => {
+    await prepareBootstrapWithRuntimeConfig({
+      agents: {
+        defaults: { workspace: "/srv/fleet-workspace" },
+        entries: { ops: {}, research: {} },
+      },
+      plugins: {},
+    });
+
+    expect(firstCallArg<{ workspaceDir?: string }>(loadPluginLookUpTable).workspaceDir).toBe(
+      "/srv/fleet-workspace",
+    );
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {

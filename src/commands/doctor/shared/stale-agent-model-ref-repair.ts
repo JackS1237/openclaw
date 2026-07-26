@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentEntries,
   resolveAgentDir,
-  resolveAgentWorkspaceDir,
+  tryResolveConfiguredAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -52,8 +52,7 @@ function collectPluginProviderIds(
     };
   }
 
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
+  const workspaceDir = tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
   const snapshot = resolvePluginMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,

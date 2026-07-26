@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import {
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope-config.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import {
   loadShellEnvFallback,
@@ -110,12 +107,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
           return snapshot;
         }
         const metadataConfig = config;
-        const soleAgentId = tryResolveDefaultAgentId(metadataConfig);
         snapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
-          workspaceDir: soleAgentId
-            ? resolveAgentWorkspaceDir(metadataConfig, soleAgentId, params.env)
-            : undefined,
+          workspaceDir: tryResolveConfiguredAgentWorkspaceDir(metadataConfig, params.env),
           env: params.env,
           allowWorkspaceScopedCurrent: true,
           pluginIdScope: createConfigValidationMetadataPluginIdScope({

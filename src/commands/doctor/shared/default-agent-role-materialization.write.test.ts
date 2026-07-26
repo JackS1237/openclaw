@@ -294,6 +294,55 @@ describe("default role materialization authored writes", () => {
     expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
   });
 
+  it("persists an env-activated channel binding when Doctor stamps a legacy fleet", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-env-channel-stamp-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: { entries: { ops: { default: true }, research: {} } },
+      })}\n`,
+      "utf-8",
+    );
+    const io = createConfigIO({
+      configPath,
+      env: {
+        HOME: root,
+        DISCORD_BOT_TOKEN: "env-only-token",
+        OPENCLAW_TEST_FAST: "1",
+      } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.config.bindings).toContainEqual({
+      agentId: "ops",
+      match: { channel: "discord", accountId: "*" },
+    });
+    const stamped = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" as const },
+    };
+
+    await io.writeConfigFile(stamped, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "ownership"]],
+      explicitSetValueSource: stamped,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      agents?: { ownership?: string };
+      bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
+    };
+    expect(persisted.agents?.ownership).toBe("explicit");
+    expect(persisted.bindings).toContainEqual({
+      agentId: "ops",
+      match: { channel: "discord", accountId: "*" },
+    });
+  });
+
   it.each([
     { label: "marked", entry: { default: true } },
     { label: "markerless", entry: {} },

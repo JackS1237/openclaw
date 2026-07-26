@@ -95,6 +95,7 @@ type RemoteGatewayRoster = {
   agentIds: string[];
   entries: Array<{ id: string; name?: string }>;
   mainKey: string;
+  scope: AgentsListResult["scope"];
 };
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
@@ -175,7 +176,7 @@ function applyRemoteGatewayRoster(
         roster.entries.map((entry) => [entry.id, entry.name ? { name: entry.name } : {}]),
       ),
     },
-    session: { ...cfg.session, mainKey: roster.mainKey },
+    session: { ...cfg.session, mainKey: roster.mainKey, scope: roster.scope },
   };
 }
 
@@ -210,6 +211,7 @@ async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatew
     agentIds: entries.map((entry) => entry.id),
     entries,
     mainKey: result.mainKey,
+    scope: result.scope,
   };
 }
 

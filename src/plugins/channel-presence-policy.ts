@@ -1,7 +1,7 @@
 // Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
@@ -359,10 +359,8 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   manifestRecords?: readonly PluginManifestRecord[];
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
-  const soleAgentId = tryResolveDefaultAgentId(params.config);
   const workspaceDir =
-    params.workspaceDir ??
-    (soleAgentId ? resolveAgentWorkspaceDir(params.config, soleAgentId) : undefined);
+    params.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(params.config, env);
   const records =
     params.manifestRecords ??
     loadInstalledChannelManifestRecords({

@@ -325,6 +325,19 @@ export function resolveAgentWorkspaceDir(
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
+/** Resolves the configured workspace used for fleet-wide plugin and manifest discovery. */
+export function tryResolveConfiguredAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    return resolveAgentWorkspaceDir(cfg, soleAgentId, env);
+  }
+  const configured = cfg.agents?.defaults?.workspace?.trim();
+  return configured ? stripNullBytes(resolveUserPath(configured, env)) : undefined;
+}
+
 export function resolveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,

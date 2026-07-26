@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { beginLegacyDefaultOwnerHandoff } from "../cron/live-service-registry.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -172,6 +173,13 @@ export async function writeConfigFileFromContext(
         )
         .find((migration) => (migration.insertedPaths?.length ?? 0) > 0)?.insertedPaths ?? [])
     : [];
+  const retainedLegacyRuntimeInsertedPaths =
+    retainedLegacyDefaultAgentId &&
+    Array.isArray(snapshot.config.bindings) &&
+    snapshot.config.bindings.length > 0 &&
+    !isDeepStrictEqual(snapshot.sourceConfigBeforeMigrations?.bindings, snapshot.config.bindings)
+      ? [["bindings"]]
+      : [];
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const previousAgentCount = listAgentEntries(snapshot.config).length;
   const nextAgentEntries = listAgentEntries(nextConfig);
@@ -219,10 +227,11 @@ export async function writeConfigFileFromContext(
     entersMultiAgent || retainedLegacyDefaultAgentId
       ? [
           ...new Map(
-            [...legacySourceInsertedPaths, ...transitionInsertedPaths].map((ownershipPath) => [
-              ownershipPath.join("\0"),
-              ownershipPath,
-            ]),
+            [
+              ...legacySourceInsertedPaths,
+              ...retainedLegacyRuntimeInsertedPaths,
+              ...transitionInsertedPaths,
+            ].map((ownershipPath) => [ownershipPath.join("\0"), ownershipPath]),
           ).values(),
         ]
       : [];

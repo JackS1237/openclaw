@@ -502,12 +502,14 @@ export async function applySystemAgentSetup(
               "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
             );
           }
+          const onboardingTarget = resolveOnboardingAgentTarget(finalizedConfig, targetAgentId);
           // This is the auth/config operation's linearization point. Never hold
           // the synchronous cross-store guard across async config I/O.
           assertCommitPreconditions?.();
           return {
             nextConfig: finalizedConfig,
             result: {
+              onboardingTarget,
               settings: setupCandidate.settings,
             },
           };
@@ -517,10 +519,10 @@ export async function applySystemAgentSetup(
   const nextConfig = committed.nextConfig;
   const setupResult = committed.result;
   const settings = setupResult?.settings;
-  if (!settings) {
-    throw new Error("OpenClaw setup committed without resolved Gateway settings.");
+  const onboardingTarget = setupResult?.onboardingTarget;
+  if (!settings || !onboardingTarget) {
+    throw new Error("OpenClaw setup committed without resolved Gateway settings and agent target.");
   }
-  const onboardingTarget = resolveOnboardingAgentTarget(nextConfig, targetAgentId);
   const effectiveWorkspace = onboardingTarget.workspaceDir;
   if (params.expectedInferenceRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();

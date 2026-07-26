@@ -4,8 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntriesWithSource,
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
+  tryResolveConfiguredAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -265,10 +264,7 @@ function validateConfigObjectWithPluginsBase(
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
       return registryInfo;
     }
-    const soleAgentId = tryResolveDefaultAgentId(config);
-    const workspaceDir = soleAgentId
-      ? resolveAgentWorkspaceDir(config, soleAgentId, opts.env)
-      : undefined;
+    const workspaceDir = tryResolveConfiguredAgentWorkspaceDir(config, opts.env);
     const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,
