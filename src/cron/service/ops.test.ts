@@ -177,7 +177,11 @@ describe("cron agent ownership reloads", () => {
     });
     await writeCronStoreSnapshot({
       storePath,
-      jobs: [legacyJob("clear-owner"), legacyJob("unavailable-owner")],
+      jobs: [
+        legacyJob("clear-owner"),
+        legacyJob("unavailable-owner"),
+        { ...legacyJob("retarget-owner"), agentId: "main" },
+      ],
     });
     const state = createCronServiceState({
       storePath,
@@ -197,6 +201,12 @@ describe("cron agent ownership reloads", () => {
     await expect(
       update(state, "unavailable-owner", { sessionKey: "agent:retired:main" }),
     ).rejects.toThrow("cron job agent is unavailable: retired");
+    await expect(
+      update(state, "retarget-owner", { sessionKey: "agent:research:main" }),
+    ).resolves.toMatchObject({
+      agentId: "research",
+      sessionKey: "agent:research:main",
+    });
   });
 });
 

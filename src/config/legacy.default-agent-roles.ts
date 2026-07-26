@@ -21,35 +21,6 @@ function readVoiceCallPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return isRecord(config) ? config : undefined;
 }
 
-/** True after Doctor has durably materialized the non-channel legacy owner set. */
-export function hasExplicitLegacyOwnershipBaseline(
-  cfg: OpenClawConfig,
-  legacyAgentId: string,
-): boolean {
-  const agentId = normalizeAgentId(legacyAgentId);
-  const entry = listAgentEntries(cfg).find(
-    (candidate) => normalizeAgentId(candidate.id) === agentId,
-  );
-  const heartbeat = cfg.agents?.defaults?.heartbeat;
-  const hasHeartbeatOwner =
-    heartbeat !== undefined ||
-    listAgentEntries(cfg).some((candidate) => Boolean(candidate.heartbeat));
-  const voiceCallEntry = cfg.plugins?.entries?.["voice-call"];
-  const voiceCallConfig = readVoiceCallPluginConfig(cfg);
-  const needsVoiceCallOwner =
-    voiceCallEntry?.enabled !== false &&
-    voiceCallConfig?.enabled === true &&
-    voiceCallConfig !== undefined;
-  return (
-    typeof entry?.workspace === "string" &&
-    entry.workspace.trim().length > 0 &&
-    hasHeartbeatOwner &&
-    Boolean(normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId)) &&
-    Boolean(normalizeOptionalString(cfg.talk?.agentId)) &&
-    (!needsVoiceCallOwner || Boolean(normalizeOptionalString(voiceCallConfig.agentId)))
-  );
-}
-
 function listAmbientConfiguredChannelIds(
   cfg: OpenClawConfig,
   ambientChannelIds: readonly string[] = [],
@@ -132,12 +103,15 @@ export function materializeLegacyDefaultAgentRoles(
     const entry = entryKey ? entries[entryKey] : undefined;
     if (entry) {
       const configuredWorkspace = normalizeOptionalString(entry.workspace);
+      const workspaceNeedsPin =
+        !Object.hasOwn(entry, "workspace") ||
+        (typeof entry.workspace === "string" && entry.workspace.trim().length === 0);
       const workspace =
         configuredWorkspace ??
         normalizeOptionalString(next.agents?.defaults?.workspace) ??
         resolveDefaultAgentWorkspaceDir(options.env);
       // An authored-but-malformed value must survive until schema validation.
-      if (!Object.hasOwn(entry, "workspace")) {
+      if (workspaceNeedsPin) {
         entries[entryKey!] = { ...entry, workspace };
         insertedPaths.push(["agents", "entries", entryKey!, "workspace"]);
         changes.push(
@@ -149,7 +123,7 @@ export function materializeLegacyDefaultAgentRoles(
         });
       }
       const pluginPath =
-        !Object.hasOwn(entry, "workspace") || configuredWorkspace
+        workspaceNeedsPin || configuredWorkspace
           ? path.join(resolveUserPath(workspace, options.env), ".openclaw", "extensions")
           : undefined;
       const rawPluginPaths = next.plugins?.load?.paths;

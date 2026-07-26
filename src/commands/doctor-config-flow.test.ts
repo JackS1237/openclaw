@@ -1680,6 +1680,7 @@ describe("doctor config flow", () => {
     });
     expect(result.cfg.talk).toMatchObject({ provider: "test", agentId: "ops" });
     expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(result.cfg.agents?.ownership).toBe("explicit");
   });
 
   it("preserves shared all-agent heartbeat enrollment during materialization", async () => {
@@ -1711,6 +1712,7 @@ describe("doctor config flow", () => {
   it("does not rematerialize explicit roles or touch single-agent configs", async () => {
     const materialized = {
       agents: {
+        ownership: "explicit" as const,
         defaults: {
           heartbeat: { agentId: "ops" },
           systemAgent: { agentId: "ops" },

@@ -26,6 +26,7 @@ describe("live cron ownership handoff", () => {
           release: releaseServiceLock,
         };
       }),
+      refreshLegacyDefaultAgentOwnerHandoff: vi.fn(async () => {}),
     };
     const firstRegistration = registerLiveCronService(storePath, firstService);
     await firstRegistration.ready;
@@ -46,6 +47,7 @@ describe("live cron ownership handoff", () => {
         migration: { changes: [], warnings: [] },
         release: vi.fn(),
       })),
+      refreshLegacyDefaultAgentOwnerHandoff: vi.fn(async () => {}),
     };
     const joiningRegistration = registerLiveCronService(storePath, joiningService);
     let joiningReady = false;
@@ -65,6 +67,45 @@ describe("live cron ownership handoff", () => {
     expect(releaseServiceLock).toHaveBeenCalledOnce();
     firstRegistration.unregister();
     joiningRegistration.unregister();
+  });
+
+  it("migrates once and refreshes a second live service sharing the store", async () => {
+    const storePath = `/tmp/openclaw-live-cron-shared-${Date.now()}.json`;
+    const releaseStoreLock = vi.fn();
+    const leader = {
+      beginLegacyDefaultAgentOwnerHandoff: vi.fn(async () => ({
+        migration: { changes: ["migrated once"], warnings: [] },
+        release: releaseStoreLock,
+      })),
+      refreshLegacyDefaultAgentOwnerHandoff: vi.fn(async () => {}),
+    };
+    const follower = {
+      beginLegacyDefaultAgentOwnerHandoff: vi.fn(async () => {
+        throw new Error("the follower must not acquire the shared store lock");
+      }),
+      refreshLegacyDefaultAgentOwnerHandoff: vi.fn(async () => {}),
+    };
+    const leaderRegistration = registerLiveCronService(storePath, leader);
+    const followerRegistration = registerLiveCronService(storePath, follower);
+    await Promise.all([leaderRegistration.ready, followerRegistration.ready]);
+
+    const handoff = beginLegacyDefaultOwnerHandoff({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    await expect(handoff.drainAndSeal()).resolves.toEqual({
+      changes: ["migrated once"],
+      warnings: [],
+    });
+    expect(leader.beginLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
+    expect(follower.beginLegacyDefaultAgentOwnerHandoff).not.toHaveBeenCalled();
+    expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
+    expect(releaseStoreLock).not.toHaveBeenCalled();
+
+    handoff.release();
+    expect(releaseStoreLock).toHaveBeenCalledOnce();
+    leaderRegistration.unregister();
+    followerRegistration.unregister();
   });
 
   it("does not start cron work after stop wins while registration is waiting", async () => {

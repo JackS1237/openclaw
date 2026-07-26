@@ -173,12 +173,13 @@ export function applyAgentConfig(
     }
     nextList.push(nextEntry);
   }
-  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   return {
     ...cfg,
     ...(nextPlugins ? { plugins: nextPlugins } : {}),
     agents: {
       ...agentsConfig,
+      ...(nextList.length > 1 ? { ownership: "explicit" as const } : {}),
       entries: toAgentEntriesRecord(nextList),
     },
   };
@@ -234,11 +235,19 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
-  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
-    ? { ...agentsConfig, defaults: nextDefaults, entries: nextAgents }
+    ? {
+        ...agentsConfig,
+        ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+        defaults: nextDefaults,
+        entries: nextAgents,
+      }
     : nextAgents
-      ? { entries: nextAgents }
+      ? {
+          ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+          entries: nextAgents,
+        }
       : undefined;
   const nextTools = cfg.tools?.agentToAgent
     ? {

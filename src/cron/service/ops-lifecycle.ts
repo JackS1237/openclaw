@@ -43,6 +43,11 @@ export async function beginLegacyDefaultAgentOwnerHandoff(
   }
 }
 
+/** Reloads one follower while the registry's single store-wide handoff lock is held. */
+export async function refreshLegacyDefaultAgentOwnerHandoff(state: CronServiceState) {
+  await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+}
+
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
 export async function start(state: CronServiceState) {
   state.stopped = false;

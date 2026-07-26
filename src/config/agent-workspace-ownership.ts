@@ -24,7 +24,14 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
     (candidate) => normalizeAgentId(candidate) === agentId,
   );
   const entry = entryKey ? entries[entryKey] : undefined;
-  if (!entry || Object.hasOwn(entry, "workspace")) {
+  const workspaceIsResolved =
+    typeof entry?.workspace === "string" && entry.workspace.trim().length > 0;
+  const workspaceIsMalformed =
+    entry !== undefined &&
+    Object.hasOwn(entry, "workspace") &&
+    entry.workspace !== undefined &&
+    typeof entry.workspace !== "string";
+  if (!entry || workspaceIsResolved || workspaceIsMalformed) {
     return { config: params.targetConfig, insertedPaths: [] };
   }
 

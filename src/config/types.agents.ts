@@ -176,6 +176,8 @@ export type AgentConfig = {
 export type AgentEntryConfig = Omit<AgentConfig, "id">;
 
 export type AgentsConfig = {
+  /** Marks a multi-agent roster as using explicit per-surface ownership. */
+  ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */

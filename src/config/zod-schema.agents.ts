@@ -27,6 +27,7 @@ const AgentEntryConfigSchema = z.preprocess(
 
 export const AgentsSchema = z
   .object({
+    ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     entries: z
       .record(

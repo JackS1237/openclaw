@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { tryGetLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { AgentsSchema } from "./zod-schema.agents.js";
@@ -11,7 +12,9 @@ describe("agent roster ownership", () => {
 
   it("accepts sole and multi-agent rosters without a stored default", () => {
     expect(AgentsSchema.safeParse({ entries: { alpha: {} } }).success).toBe(true);
-    expect(AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } }).success).toBe(true);
+    expect(
+      AgentsSchema.safeParse({ ownership: "explicit", entries: { alpha: {}, beta: {} } }).success,
+    ).toBe(true);
   });
 
   it("rejects the retired default marker", () => {
@@ -88,6 +91,23 @@ describe("explicit ambient agent targets", () => {
 });
 
 describe("multi-agent ambient ownership warnings", () => {
+  it("fails closed for a fresh explicitly owned fleet with no ambient targets", () => {
+    const result = validateConfigObjectWithPlugins(
+      { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      { pluginValidation: "skip" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(tryResolveDefaultAgentId(result.config)).toBeUndefined();
+      expect(tryGetLegacyDefaultAgentId(result.config)).toBeUndefined();
+      expect(result.warnings.map((warning) => warning.path)).toEqual([
+        "agents.defaults.heartbeat.agentId",
+        "agents.defaults.systemAgent.agentId",
+        "talk.agentId",
+      ]);
+    }
+  });
+
   it("warns for every first-entry surface materialized from a marker-free fleet", () => {
     const result = validateConfigObjectWithPlugins(
       {
@@ -115,6 +135,7 @@ describe("multi-agent ambient ownership warnings", () => {
       { agents: { entries: { solo: {} } } },
       {
         agents: {
+          ownership: "explicit" as const,
           defaults: {
             heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
@@ -142,6 +163,7 @@ describe("multi-agent ambient ownership warnings", () => {
     const result = validateConfigObjectWithPlugins(
       {
         agents: {
+          ownership: "explicit",
           defaults: {
             heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },

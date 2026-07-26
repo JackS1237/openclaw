@@ -11,6 +11,33 @@ Agent-scoped configuration keys under `agents.*`, `multiAgent.*`, `session.*`,
 `messages.*`, and `talk.*`. For channels, tools, gateway runtime, and other
 top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
+## Multi-agent ownership generation
+
+Multi-agent rosters created by current OpenClaw versions carry
+`agents.ownership: "explicit"`. This write-once generation marker means there is
+no fleet-wide default agent: inbound channels and other ambient surfaces must
+name their owner through bindings or their surface-specific `agentId` target.
+Operations that still have no owner fail closed instead of selecting the first
+roster entry.
+
+```json5
+{
+  agents: {
+    ownership: "explicit",
+    entries: {
+      ops: { workspace: "~/.openclaw/workspace-ops" },
+      research: { workspace: "~/.openclaw/workspace-research" },
+    },
+  },
+  bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+}
+```
+
+OpenClaw writes this field when a sole roster expands into a fleet. During an
+upgrade, a marker-free multi-agent roster is treated as a legacy roster whose
+first entry owned ambient work; `openclaw doctor --fix` materializes those
+per-surface owners and stamps the field. Sole-agent configs do not need it.
+
 ## Agent defaults
 
 ### `agents.defaults.workspace`

@@ -27,8 +27,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import {
-  appendProvisionalLegacyOwnershipWarnings,
-  finalizeProvisionalLegacyDefaultAgent,
+  appendLegacyOwnershipWarnings,
   inheritLegacyDefaultAgentId,
   listLegacyOwnershipWarnings,
   tryGetLegacyDefaultAgentId,
@@ -143,7 +142,6 @@ function materializeLegacyActiveChannelOwners(
     env,
   );
   const config = materialized.config;
-  finalizeProvisionalLegacyDefaultAgent(config);
   const warnings = [...result.warnings, ...listLegacyOwnershipWarnings(config)];
   const seenWarnings = new Set<string>();
   return {
@@ -185,7 +183,7 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
     ambientChannelIds,
   });
   const next = inheritLegacyDefaultAgentId(config, materialized.config);
-  appendProvisionalLegacyOwnershipWarnings(next, materialized.warnings);
+  appendLegacyOwnershipWarnings(next, materialized.warnings);
   return { ...materialized, config: next };
 }
 

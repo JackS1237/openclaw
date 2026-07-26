@@ -340,11 +340,30 @@ export async function updateLoadedJob(params: {
     scheduledToolPolicy: opts?.scheduledToolPolicy,
   });
   if ("agentId" in patch || "sessionKey" in patch) {
+    const scopedAgentId = normalizeOptionalAgentId(
+      parseAgentSessionKey(nextJob.sessionKey)?.agentId,
+    );
+    const configuredAgentId = normalizeOptionalAgentId(nextJob.agentId);
+    if (
+      "agentId" in patch &&
+      scopedAgentId &&
+      configuredAgentId &&
+      scopedAgentId !== configuredAgentId
+    ) {
+      throw new Error(
+        `cron job agentId ${configuredAgentId} does not match sessionKey owner ${scopedAgentId}`,
+      );
+    }
+    if ("sessionKey" in patch && scopedAgentId) {
+      // A scoped session-key retarget is itself an ownership retarget. Persist
+      // the same owner in agentId so timer and session-store routing agree.
+      nextJob.agentId = scopedAgentId;
+    }
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
-    if (!parseAgentSessionKey(nextJob.sessionKey)) {
+    if (!scopedAgentId) {
       nextJob.agentId = agentId;
     }
   }

@@ -81,6 +81,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.experimental": "Agent Experimental Flags",
   "agents.entries.*.experimental.localModelLean": "Agent Lean Local Model Mode",
   agents: "Agents",
+  "agents.ownership": "Agent Ownership Generation",
   "agents.defaults": "Agent Defaults",
   "agents.defaults.contextLimits": "Default Context Limits",
   "agents.defaults.contextLimits.memoryGetMaxChars": "Default memory_get Max Chars",

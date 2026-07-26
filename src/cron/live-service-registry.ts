@@ -6,12 +6,13 @@ type LiveCronOwnerMigration = {
     migration: LegacyDefaultCronOwnerMigrationResult;
     release: () => void;
   }>;
+  refreshLegacyDefaultAgentOwnerHandoff: () => Promise<void>;
 };
 
 type ActiveHandoff = {
   completion: Promise<void>;
   resolveCompletion: () => void;
-  releases: Array<() => void>;
+  releaseStoreLock?: () => void;
 };
 
 type LiveStoreState = {
@@ -71,32 +72,35 @@ export function beginLegacyDefaultOwnerHandoff(params: {
   const completion = new Promise<void>((resolve) => {
     resolveCompletion = resolve;
   });
-  const handoff: ActiveHandoff = { completion, resolveCompletion, releases: [] };
+  const handoff: ActiveHandoff = { completion, resolveCompletion };
   state.handoff = handoff;
   // Registration is synchronous and every later starter waits on completion,
   // so this snapshot is the closed set of services already able to mutate jobs.
-  const participants = [...state.services].map(async (service) => {
-    const result = await service.beginLegacyDefaultAgentOwnerHandoff(params.legacyDefaultAgentId);
-    handoff.releases.push(result.release);
-    return result.migration;
-  });
+  const participants = [...state.services];
   let released = false;
   return {
     drainAndSeal: async () => {
-      const results = await Promise.all(participants);
-      return {
-        changes: results.flatMap((result) => result.changes),
-        warnings: results.flatMap((result) => result.warnings),
-      };
+      const [leader, ...followers] = participants;
+      if (!leader) {
+        return { changes: [], warnings: [] };
+      }
+      // One participant holds the store-wide operation lock and performs the
+      // migration. That lock already drains every service sharing this store;
+      // followers only reload the durable rows while it remains held.
+      const result = await leader.beginLegacyDefaultAgentOwnerHandoff(params.legacyDefaultAgentId);
+      handoff.releaseStoreLock = result.release;
+      await Promise.all(
+        followers.map((service) => service.refreshLegacyDefaultAgentOwnerHandoff()),
+      );
+      return result.migration;
     },
     release: () => {
       if (released) {
         return;
       }
       released = true;
-      for (const release of handoff.releases.splice(0)) {
-        release();
-      }
+      handoff.releaseStoreLock?.();
+      delete handoff.releaseStoreLock;
       if (state.handoff === handoff) {
         delete state.handoff;
       }

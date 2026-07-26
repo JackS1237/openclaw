@@ -1,10 +1,11 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
-import { retainLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import {
-  hasExplicitLegacyOwnershipBaseline,
-  materializeLegacyDefaultAgentRoles,
-} from "./legacy.default-agent-roles.js";
+  listLegacyOwnershipWarnings,
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner.js";
+import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type MigrationResult = {
@@ -70,12 +71,18 @@ export function tryResolveLegacyDefaultAgentId(raw: unknown): string | undefined
     return marked.id;
   }
   const hasBooleanMarker = valid.some(({ entry }) => Object.hasOwn(entry, "default"));
-  if (rosterProperty.kind === "list" || hasBooleanMarker) {
+  if (hasBooleanMarker) {
     return valid[0]!.id;
   }
-  // Shipped marker-free maps used first-entry fallback per ambient surface.
-  // The load migration decides independently which still lack an explicit owner.
-  return valid.length > 1 ? valid[0]!.id : undefined;
+  const agents = (raw as { agents?: unknown }).agents;
+  const explicitOwnership =
+    agents &&
+    typeof agents === "object" &&
+    !Array.isArray(agents) &&
+    (agents as Record<string, unknown>).ownership === "explicit";
+  // The durable roster-level generation marker is the only discriminator.
+  // Marker-free fleets that predate it retain shipped first-entry ownership.
+  return valid.length > 1 && !explicitOwnership ? valid[0]!.id : undefined;
 }
 
 function injectImplicitMain(
@@ -112,7 +119,9 @@ export function migratePersistedImplicitMainRoster(
     root.agents && typeof root.agents === "object" && !Array.isArray(root.agents)
       ? (root.agents as Record<string, unknown>)
       : {};
-  const rawLegacyDefaultAgentId = tryResolveLegacyDefaultAgentId({ ...root, agents });
+  const rawLegacyDefaultAgentId =
+    tryGetLegacyDefaultAgentId(raw as OpenClawConfig) ??
+    tryResolveLegacyDefaultAgentId({ ...root, agents });
   const diagnostics: string[] = [];
   let changed = false;
   let legacyListOrder: string[] | undefined;
@@ -198,18 +207,17 @@ export function migratePersistedImplicitMainRoster(
     rawLegacyDefaultAgentId ??
     orderedDefaultId ??
     (legacyListOrder || hasBooleanMarker ? orderedValidIds[0] : undefined);
-  const markerFreeFleet = legacyListOrder === undefined && validIds.length > 1 && !hasBooleanMarker;
+  const markerFreeFleet = validIds.length > 1 && !hasBooleanMarker;
   let nextRoot: Record<string, unknown> = { ...root, agents };
-  // No config-generation field exists. A complete persisted H2 target set is
-  // therefore the durable convergence signal; bindings alone are not, because
-  // shipped first-entry fleets could already contain narrower peer bindings.
+  const explicitOwnership = agents.ownership === "explicit";
+  // Retired boolean markers always carry shipped ownership. Marker-free fleets
+  // retain first-entry ownership only until Doctor stamps the durable generation.
   const legacyDefaultAgentId =
-    markerFreeFleet &&
-    candidateLegacyDefaultAgentId &&
-    hasExplicitLegacyOwnershipBaseline(nextRoot as OpenClawConfig, candidateLegacyDefaultAgentId)
-      ? undefined
-      : candidateLegacyDefaultAgentId;
-  let materializationWarnings: Array<{ path: string; message: string }> = [];
+    (hasBooleanMarker && Object.keys(roster).length > 1) ||
+    (validIds.length > 1 && !explicitOwnership)
+      ? candidateLegacyDefaultAgentId
+      : undefined;
+  let materializationWarnings = listLegacyOwnershipWarnings(raw as OpenClawConfig);
   if (Object.keys(roster).length > 1 && legacyDefaultAgentId) {
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
@@ -217,9 +225,15 @@ export function migratePersistedImplicitMainRoster(
       { materializeWorkspace: true, env },
     );
     nextRoot = materialized.config as Record<string, unknown>;
-    materializationWarnings = materialized.warnings;
+    materializationWarnings = [...materializationWarnings, ...materialized.warnings];
     diagnostics.push(...materialized.changes);
     changed = changed || materialized.changes.length > 0;
+    if (markerFreeFleet && !explicitOwnership && materialized.changes.length === 0) {
+      // Doctor still needs a write even when every currently known surface was
+      // already explicit; only agents.ownership durably ends legacy semantics.
+      changed = true;
+      diagnostics.push("Marked the legacy agent roster for explicit ownership persistence.");
+    }
   }
 
   if (hasBooleanMarker) {
@@ -244,13 +258,8 @@ export function migratePersistedImplicitMainRoster(
   }
 
   const config = (changed ? nextRoot : raw) as OpenClawConfig;
-  const retainedLegacyDefaultAgentId =
-    legacyDefaultAgentId &&
-    (!markerFreeFleet || legacyListOrder !== undefined || materializationWarnings.length > 0)
-      ? legacyDefaultAgentId
-      : undefined;
+  const retainedLegacyDefaultAgentId = legacyDefaultAgentId;
   retainLegacyDefaultAgentId(config, legacyDefaultAgentId, {
-    provisional: markerFreeFleet,
     warnings: markerFreeFleet ? materializationWarnings : undefined,
   });
   return {

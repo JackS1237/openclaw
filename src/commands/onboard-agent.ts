@@ -28,11 +28,13 @@ function mergeOnboardingCandidate(params: {
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
   const { list: _legacyList, ...agents } = merged.agents ?? {};
+  const entries = toAgentEntriesRecord(listAgentEntries(params.currentRuntime));
   return {
     ...merged,
     agents: {
       ...agents,
-      entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
+      ...(Object.keys(entries).length > 1 ? { ownership: "explicit" as const } : {}),
+      entries,
     },
   };
 }
@@ -59,8 +61,15 @@ export async function ensureOnboardingAgent(params: {
     candidateRoster.length > 0 &&
     (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
   ) {
+    const config =
+      candidateRoster.length > 1
+        ? {
+            ...params.config,
+            agents: { ...params.config.agents, ownership: "explicit" as const },
+          }
+        : params.config;
     return {
-      config: params.config,
+      config,
       agentId: resolveDefaultAgentId(params.config),
       bootstrapPending: false,
     };

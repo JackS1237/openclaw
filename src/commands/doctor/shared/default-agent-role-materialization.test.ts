@@ -55,6 +55,7 @@ async function snapshotSurfaces(
 
 const explicitMultiAgent: OpenClawConfig = {
   agents: {
+    ownership: "explicit",
     defaults: {
       heartbeat: { agentId: "ops" },
       systemAgent: { agentId: "ops" },
@@ -111,7 +112,7 @@ describe("sole-agent-or-explicit ambient routing", () => {
 
   it("fails every ownerless multi-agent surface with typed remediation", async () => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { ops: {}, research: {} } },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
       channels: { telegram: { enabled: true } },
     };
     const operations = [
@@ -149,6 +150,22 @@ describe("sole-agent-or-explicit ambient routing", () => {
 });
 
 describe("retired default role materialization", () => {
+  it("pins a blank-string legacy workspace instead of treating it as resolved", () => {
+    const result = materializeLegacyDefaultAgentRoles(
+      {
+        agents: {
+          defaults: { workspace: "/srv/shared" },
+          entries: { ops: { workspace: "" }, research: {} },
+        },
+      },
+      "ops",
+      { materializeWorkspace: true },
+    );
+
+    expect(result.config.agents?.entries?.ops?.workspace).toBe("/srv/shared");
+    expect(result.insertedPaths).toContainEqual(["agents", "entries", "ops", "workspace"]);
+  });
+
   it("adds only uncovered channel-wide bindings and preserves narrower routes", () => {
     const config: OpenClawConfig = {
       agents: { entries: { ops: {}, research: {} } },

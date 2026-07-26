@@ -186,6 +186,14 @@ export async function writeConfigFileFromContext(
     previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
   const crossesIntoMultiAgent =
     previousSoleAgentId !== undefined && previousSoleRemains && nextAgentEntries.length > 1;
+  const ownershipGenerationInserted =
+    crossesIntoMultiAgent && snapshot.config.agents?.ownership !== "explicit";
+  if (crossesIntoMultiAgent && nextConfig.agents?.ownership !== "explicit") {
+    nextConfig = {
+      ...nextConfig,
+      agents: { ...nextConfig.agents, ownership: "explicit" },
+    };
+  }
   const workspacePin = crossesIntoMultiAgent
     ? pinSoleAgentWorkspaceForFleetExpansion({
         sourceConfig: snapshot.config,
@@ -195,7 +203,10 @@ export async function writeConfigFileFromContext(
       })
     : { config: nextConfig, insertedPaths: [] as string[][] };
   nextConfig = workspacePin.config;
-  let transitionInsertedPaths = workspacePin.insertedPaths;
+  let transitionInsertedPaths = [
+    ...workspacePin.insertedPaths,
+    ...(ownershipGenerationInserted ? [["agents", "ownership"]] : []),
+  ];
   if (crossesIntoMultiAgent) {
     const materialized = materializeLegacyAgentOwnershipForActiveChannelsResult(
       nextConfig,

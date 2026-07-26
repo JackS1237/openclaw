@@ -78,14 +78,22 @@ describe("default role materialization authored writes", () => {
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.config.agents?.entries?.ops).not.toHaveProperty("default");
     expect(snapshot.config.agents?.defaults?.heartbeat?.agentId).toBe("ops");
-    await io.writeConfigFile(snapshot.config, {
+    const doctorCandidate = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" as const },
+    };
+    await io.writeConfigFile(doctorCandidate, {
       baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "entries"]],
-      explicitSetValueSource: snapshot.config,
+      explicitSetPaths: [
+        ["agents", "entries"],
+        ["agents", "ownership"],
+      ],
+      explicitSetValueSource: doctorCandidate,
     });
 
     const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
       agents?: {
+        ownership?: string;
         defaults?: { model?: string; heartbeat?: { agentId?: string } };
         entries?: Record<string, { model?: string; default?: boolean; workspace?: string }>;
       };
@@ -98,6 +106,7 @@ describe("default role materialization authored writes", () => {
       };
     };
     expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
+    expect(persisted.agents?.ownership).toBe("explicit");
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
     expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
     expect(persisted.agents?.entries?.ops?.workspace).toBe(
@@ -230,7 +239,17 @@ describe("default role materialization authored writes", () => {
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
-        await cron.start();
+        const secondCron = new CronService({
+          storePath,
+          cronEnabled: true,
+          resolveDefaultAgentId: () => currentDefaultAgentId,
+          isAgentAvailable: () => true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
+        });
+        await Promise.all([cron.start(), secondCron.start()]);
         const io = createConfigIO({
           configPath,
           env,
@@ -265,6 +284,7 @@ describe("default role materialization authored writes", () => {
           });
           currentDefaultAgentId = undefined;
           expect(cron.getLoadedJobs()?.[0]?.agentId).toBe("ops");
+          expect(secondCron.getLoadedJobs()?.[0]?.agentId).toBe("ops");
           await expect(cron.run("ownerless", "force")).resolves.toMatchObject({
             ok: true,
             ran: true,
@@ -309,6 +329,7 @@ describe("default role materialization authored writes", () => {
           ).toBe("ops");
         } finally {
           cron.stop();
+          secondCron.stop();
         }
       });
     },
@@ -342,10 +363,17 @@ describe("default role materialization authored writes", () => {
         "talk.agentId",
       ]),
     );
-    await io.writeConfigFile(snapshot.config, {
+    const doctorCandidate = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" as const },
+    };
+    await io.writeConfigFile(doctorCandidate, {
       baseSnapshot: snapshot,
-      explicitSetPaths: [["agents", "entries"]],
-      explicitSetValueSource: snapshot.config,
+      explicitSetPaths: [
+        ["agents", "entries"],
+        ["agents", "ownership"],
+      ],
+      explicitSetValueSource: doctorCandidate,
     });
 
     resetConfigRuntimeState();
@@ -362,6 +390,7 @@ describe("default role materialization authored writes", () => {
     expect(reread.config.agents?.entries?.ops?.workspace).toBe(
       path.join(root, ".openclaw", "workspace"),
     );
+    expect(reread.config.agents?.ownership).toBe("explicit");
   });
 
   it("does not hand ownership to a previous sole agent removed by the fleet write", async () => {

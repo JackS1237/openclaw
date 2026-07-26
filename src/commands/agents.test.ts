@@ -113,6 +113,22 @@ describe("agents helpers", () => {
     expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
   });
 
+  it("stamps explicit ownership and pins a blank sole workspace on fleet expansion", () => {
+    const next = applyAgentConfig(
+      {
+        agents: {
+          defaults: { workspace: "/srv/shared" },
+          entries: { ops: { workspace: "" } },
+        },
+      },
+      { agentId: "research" },
+    );
+
+    expect(next.agents?.ownership).toBe("explicit");
+    expect(next.agents?.entries?.ops?.workspace).toBe("/srv/shared");
+    expect(next.agents?.entries).toHaveProperty("research");
+  });
+
   it("applyAgentConfig clears a model override", () => {
     const cfg: OpenClawConfig = {
       agents: {

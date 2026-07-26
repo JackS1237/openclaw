@@ -107,6 +107,10 @@ export class CronService implements CronServiceContract {
     );
   }
 
+  async refreshLegacyDefaultAgentOwnerHandoff() {
+    await lifecycleOps.refreshLegacyDefaultAgentOwnerHandoff(this.state);
+  }
+
   pauseScheduling() {
     lifecycleOps.pauseScheduling(this.state);
   }

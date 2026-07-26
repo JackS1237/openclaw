@@ -499,6 +499,17 @@ describe("persisted implicit-main roster migration", () => {
     ]);
   });
 
+  it("treats the durable explicit-ownership generation as ownerless by design", () => {
+    const raw = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    const migrated = migratePersistedImplicitMainRoster(raw);
+
+    expect(migrated).toEqual({ config: raw, changed: false, diagnostics: [] });
+    expect(tryGetLegacyDefaultAgentId(migrated.config as OpenClawConfig)).toBeUndefined();
+  });
+
   it("preserves malformed explicit ownership values for schema rejection", () => {
     const raw = {
       agents: {
