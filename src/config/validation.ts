@@ -9,7 +9,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { listGatewayActivatedChannelIds } from "../plugins/channel-presence-policy.js";
+import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -174,7 +174,7 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   env?: NodeJS.ProcessEnv,
 ): LegacyDefaultAgentRoleMaterialization {
   const activationSourceConfig = applyPluginAutoEnable({ config, env }).config;
-  const ambientChannelIds = listGatewayActivatedChannelIds({
+  const ambientChannelIds = listChannelIdsForOwnershipMigration({
     config,
     activationSourceConfig,
     env,

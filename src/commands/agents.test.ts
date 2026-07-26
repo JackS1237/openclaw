@@ -468,4 +468,22 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });
+
+  it("pins the surviving fleet workspace before pruning to a sole agent", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: "/srv/agents" },
+          entries: { work: {}, home: {} },
+        },
+      },
+      "work",
+    );
+
+    expect(result.config.agents?.ownership).toBeUndefined();
+    expect(result.config.agents?.entries).toEqual({
+      home: { workspace: "/srv/agents/home" },
+    });
+  });
 });

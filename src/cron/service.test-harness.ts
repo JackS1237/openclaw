@@ -254,6 +254,7 @@ export function createMockCronStateForJobs(params: {
   const nowMs = params.nowMs ?? Date.now();
   return {
     store: { version: 1, jobs: params.jobs },
+    storeEpoch: 0,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     running: false,
     stopped: false,

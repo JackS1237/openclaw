@@ -259,13 +259,23 @@ export function pruneAgentConfig(
       }
     : cfg.tools;
 
+  const preliminaryConfig: OpenClawConfig = {
+    ...cfg,
+    agents: nextAgentsConfig,
+    bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    tools: nextTools,
+  };
+  const pinned =
+    nextAgentsList.length === 1
+      ? pinSoleAgentWorkspaceForFleetExpansion({
+          sourceConfig: cfg,
+          targetConfig: preliminaryConfig,
+          agentId: nextAgentsList[0]!.id,
+        })
+      : { config: preliminaryConfig };
+
   return {
-    config: {
-      ...cfg,
-      agents: nextAgentsConfig,
-      bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
-      tools: nextTools,
-    },
+    config: pinned.config,
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
   };

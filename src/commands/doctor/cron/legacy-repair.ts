@@ -120,6 +120,7 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
       },
       (db) => acquireLegacyCronMigrationReceipt(db, migrationSource),
       params.env,
+      { bumpStoreEpoch: true },
     );
     if (!acquired) {
       throw new Error("legacy cron import was completed concurrently; retry the config write");

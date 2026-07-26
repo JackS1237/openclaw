@@ -330,6 +330,25 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
+  it("does not add reserved main after a concurrent sole-agent replacement", async () => {
+    const transformConfig = vi.fn(async ({ transform }) =>
+      transform({ agents: { entries: { ops: {} } } }),
+    );
+
+    await expect(
+      createAgent({
+        entry: { id: "main", workspace: "/tmp/main" },
+        bootstrapMain: true,
+        transformConfig,
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+    });
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+  });
+
   it("respects skipBootstrap from the current config", async () => {
     mocks.config = {
       agents: { defaults: { skipBootstrap: true }, list: [{ id: "main" }] },

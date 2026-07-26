@@ -251,6 +251,8 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Epoch read with the current in-memory topology. */
+  storeEpoch: number;
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
@@ -295,6 +297,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    storeEpoch: 0,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,

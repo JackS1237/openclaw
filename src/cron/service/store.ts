@@ -5,6 +5,7 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
+  CronStoreEpochMismatchError,
   loadCronJobsStoreWithConfigJobs,
   saveCronQuarantineFile,
   saveCronJobsStore,
@@ -21,6 +22,7 @@ type PersistOptions = {
 
 export type CronRollbackSnapshot = {
   store: CronStoreFile | null;
+  storeEpoch: number;
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
 };
 
@@ -228,6 +230,7 @@ export async function ensureLoaded(
     version: 1,
     jobs,
   };
+  state.storeEpoch = loaded.storeEpoch;
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = state.deps.nowMs();
 
@@ -292,7 +295,35 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     flushedPendingQuarantine = true;
   }
   const stateOnly = !flushedPendingQuarantine && opts?.stateOnly === true;
-  await saveCronJobsStore(state.deps.storePath, store, stateOnly ? { stateOnly: true } : undefined);
+  try {
+    await saveCronJobsStore(
+      state.deps.storePath,
+      store,
+      stateOnly ? { stateOnly: true } : { expectedStoreEpoch: state.storeEpoch },
+    );
+  } catch (error) {
+    if (error instanceof CronStoreEpochMismatchError) {
+      // Another process changed ownership/topology. Refuse this stale snapshot
+      // and make subsequent service operations observe the durable replacement.
+      try {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      } catch (reloadError) {
+        // Preserve the mismatch classification so persistOrRestore cannot put
+        // the stale snapshot back. The next operation must load from SQLite.
+        state.store = null;
+        state.storeEpoch = error.actualEpoch;
+        state.durableNextRunAtMsByJobId = new Map();
+        state.deps.log.warn(
+          {
+            storePath: state.deps.storePath,
+            error: reloadError instanceof Error ? reloadError.message : String(reloadError),
+          },
+          "cron: stale store write refused, but reloading the newer epoch failed",
+        );
+      }
+    }
+    throw error;
+  }
   publishDurableNextRunChanges({
     state,
     storeJobs: store.jobs,
@@ -306,6 +337,7 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
 export function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
   return {
     store: state.store ? structuredClone(state.store) : null,
+    storeEpoch: state.storeEpoch,
     durableNextRunAtMsByJobId: new Map(state.durableNextRunAtMsByJobId),
   };
 }
@@ -331,8 +363,11 @@ export async function persistOrRestore(
       throw new Error("cron: durable store write did not complete");
     }
   } catch (err) {
-    state.store = snapshot.store;
-    state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+    if (!(err instanceof CronStoreEpochMismatchError)) {
+      state.store = snapshot.store;
+      state.storeEpoch = snapshot.storeEpoch;
+      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+    }
     throw err;
   }
   for (const notify of opts.postPersistAutoDisableNotifications ?? []) {

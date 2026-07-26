@@ -36,6 +36,7 @@ export async function beginLegacyDefaultAgentOwnerHandoff(
   try {
     await ensureLoaded(state, { skipRecompute: true });
     const migration = await materializeLoadedLegacyDefaultAgentOwners(state, legacyDefaultAgentId);
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     return { migration, release };
   } catch (error) {
     release();

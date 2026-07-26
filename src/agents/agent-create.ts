@@ -177,6 +177,17 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const currentEntries = listAgentEntries(currentConfig);
           const existingIndex = findAgentEntryIndex(currentEntries, agentId);
           const existingEntry = currentEntries[existingIndex];
+          if (
+            isBootstrapMain &&
+            currentEntries.length > 0 &&
+            !currentEntries.some(
+              (entry) => normalizeAgentId(entry.id) === RESERVED_BOOTSTRAP_AGENT_ID,
+            )
+          ) {
+            // The injected empty roster was replaced concurrently. Bootstrap
+            // authorization must never add reserved main to that authored fleet.
+            throw new DuplicateAgentError();
+          }
           if (existingIndex >= 0 && !isBootstrapMain) {
             throw new DuplicateAgentError();
           }

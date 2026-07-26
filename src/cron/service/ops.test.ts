@@ -439,6 +439,7 @@ describe("cron service ops seam coverage", () => {
       .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
       .mockResolvedValueOnce({
         store: { version: 1, jobs: [structuredClone(importedJob)] },
+        storeEpoch: 0,
         configJobs: [structuredClone(importedJob) as unknown as Record<string, unknown>],
         configJobIndexes: [0],
         configJobRuntimeEntries: [],

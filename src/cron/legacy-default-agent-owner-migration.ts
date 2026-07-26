@@ -44,7 +44,7 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
           version: 1,
           jobs: params.records as unknown as CronJob[],
         },
-        { env: params.env },
+        { env: params.env, bumpStoreEpoch: true },
       );
     }
     return rewritten > 0

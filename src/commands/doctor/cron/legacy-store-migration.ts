@@ -628,6 +628,7 @@ export async function loadLegacyCronStoreForMigration(
 
     return {
       store,
+      storeEpoch: 0,
       configJobs,
       configJobIndexes,
       configJobRuntimeEntries,
@@ -644,6 +645,7 @@ export async function loadLegacyCronStoreForMigration(
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return {
         store: { version: 1, jobs: [] },
+        storeEpoch: 0,
         configJobs: [],
         configJobIndexes: [],
         configJobRuntimeEntries: [],

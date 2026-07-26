@@ -2392,7 +2392,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("treats effective persisted auth as gateway startup intent", () => {
+  it("does not reactivate a removed channel from persisted auth alone", () => {
     listPotentialConfiguredChannelPresenceSignals.mockImplementation(
       (
         _configForTest: OpenClawConfig,
@@ -2409,11 +2409,11 @@ describe("resolveGatewayStartupPluginIds", () => {
       env: createPluginPlanningTestEnv({
         OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
       }),
-      expected: ["demo-channel", "browser", "memory-core"],
+      expected: ["browser", "memory-core"],
     });
   });
 
-  it("treats persisted auth as deferred startup intent for a trusted owner", () => {
+  it("does not defer-start a trusted owner from persisted auth alone", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     listPotentialConfiguredChannelPresenceSignals.mockImplementation(
       (
@@ -2437,7 +2437,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           OPENCLAW_STATE_DIR: "/tmp/openclaw-with-persisted-demo-channel",
         }),
       }),
-    ).toStrictEqual(["workspace-demo-channel-plugin"]);
+    ).toStrictEqual([]);
   });
 
   it("resolves channel, deferred, and startup plugin ids from one manifest registry", () => {

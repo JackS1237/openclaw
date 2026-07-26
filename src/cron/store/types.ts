@@ -28,6 +28,8 @@ export type CronConfigJobRuntimeEntry = {
 /** Combined cron store load result with canonical jobs and config-backed metadata. */
 export type LoadedCronStore = {
   store: CronStoreFile;
+  /** Cross-process revision for full-store topology writes. */
+  storeEpoch: number;
   configJobs: Array<Record<string, unknown>>;
   configJobIndexes: number[];
   configJobRuntimeEntries: CronConfigJobRuntimeEntry[];

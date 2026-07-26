@@ -448,19 +448,16 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   return entries;
 }
 
-/**
- * Lists channels the Gateway activation policy considers effective.
- * This is the shared source for startup plugin loading and legacy-owner materialization.
- */
-export function listGatewayActivatedChannelIds(
+function listChannelIdsForGatewayPolicy(
   params: Omit<
     Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
     "includePersistedAuthState"
   >,
+  includePersistedAuthState: boolean,
 ): string[] {
   return resolveConfiguredChannelPresencePolicy({
     ...params,
-    includePersistedAuthState: true,
+    includePersistedAuthState,
   })
     .filter(
       (entry) =>
@@ -471,6 +468,28 @@ export function listGatewayActivatedChannelIds(
           entry.blockedReasons.every((reason) => reason === "bundled-disabled-by-default")),
     )
     .map((entry) => entry.channelId);
+}
+
+/** Lists channels the Gateway activation policy considers effective. */
+export function listGatewayActivatedChannelIds(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  // Credentials left on disk are migration evidence, not current consent to
+  // reconnect a channel after its config or enablement signal was removed.
+  return listChannelIdsForGatewayPolicy(params, false);
+}
+
+/** Lists current and persisted channel ownership that an upgrade must preserve. */
+export function listChannelIdsForOwnershipMigration(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  return listChannelIdsForGatewayPolicy(params, true);
 }
 
 /** Lists channels that suppression removes because their only presence is ambient env. */
