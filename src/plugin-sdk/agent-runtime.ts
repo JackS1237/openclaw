@@ -10,7 +10,6 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export {
-  listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -121,6 +120,7 @@ export { jsonResult } from "../agents/tools/tool-results.js";
 export { readStringParam } from "../agents/tools/common.js";
 export {
   AgentSelectionRequiredError,
+  listAgentIds,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,

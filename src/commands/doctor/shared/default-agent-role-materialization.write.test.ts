@@ -179,6 +179,73 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.entries).toMatchObject({ ops: {}, research: {} });
   });
 
+  it("persists initially materialized ownership paths when stamping a legacy fleet", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-stamp-paths-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: { entries: { ops: { default: true }, research: {} } },
+        channels: { telegram: { enabled: true } },
+        plugins: {
+          entries: {
+            "voice-call": {
+              enabled: true,
+              config: { enabled: true, provider: "mock" },
+            },
+          },
+        },
+      })}\n`,
+      "utf-8",
+    );
+    const io = createConfigIO({
+      configPath,
+      env: { HOME: root, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const stamped = {
+      ...snapshot.config,
+      agents: { ...snapshot.config.agents, ownership: "explicit" as const },
+    };
+
+    await io.writeConfigFile(stamped, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "ownership"]],
+      explicitSetValueSource: stamped,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      agents?: {
+        ownership?: string;
+        defaults?: {
+          heartbeat?: { agentId?: string };
+          systemAgent?: { agentId?: string };
+        };
+        entries?: Record<string, { workspace?: string; default?: boolean }>;
+      };
+      bindings?: Array<{ agentId?: string; match?: { channel?: string; accountId?: string } }>;
+      plugins?: { entries?: Record<string, { config?: { agentId?: string } }> };
+      talk?: { agentId?: string };
+    };
+    expect(persisted.agents?.ownership).toBe("explicit");
+    expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");
+    expect(persisted.agents?.entries?.ops?.workspace).toBe(
+      path.join(root, ".openclaw", "workspace"),
+    );
+    expect(persisted.bindings).toContainEqual({
+      agentId: "ops",
+      match: { channel: "telegram", accountId: "*" },
+    });
+    expect(persisted.agents?.defaults?.heartbeat?.agentId).toBe("ops");
+    expect(persisted.agents?.defaults?.systemAgent?.agentId).toBe("ops");
+    expect(persisted.talk?.agentId).toBe("ops");
+    expect(persisted.plugins?.entries?.["voice-call"]?.config?.agentId).toBe("ops");
+  });
+
   it.each([
     { label: "marked", entry: { default: true } },
     { label: "markerless", entry: {} },

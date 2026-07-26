@@ -16,7 +16,7 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
   legacyDefaultAgentId: string;
   records?: Array<Record<string, unknown>>;
   env?: NodeJS.ProcessEnv;
-  persistRecords?: (records: Array<Record<string, unknown>>) => Promise<void>;
+  persistRecords?: (records: Array<Record<string, unknown>>) => Promise<number | void>;
 }): Promise<LegacyDefaultCronOwnerMigrationResult> {
   const agentId = normalizeAgentId(params.legacyDefaultAgentId);
   try {
@@ -34,13 +34,13 @@ export async function materializeLegacyDefaultCronJobOwners(params: {
               ),
             { env: params.env },
           );
-    if (params.records && params.persistRecords) {
-      await params.persistRecords(params.records);
-    }
-    return rewritten > 0
+    const persistedRewritten =
+      params.records && params.persistRecords ? await params.persistRecords(params.records) : 0;
+    const effectiveRewritten = Math.max(rewritten, persistedRewritten ?? 0);
+    return effectiveRewritten > 0
       ? {
           changes: [
-            `Assigned ${rewritten} legacy cron job${rewritten === 1 ? "" : "s"} to agent "${agentId}" before retiring the stored default.`,
+            `Assigned ${effectiveRewritten} legacy cron job${effectiveRewritten === 1 ? "" : "s"} to agent "${agentId}" before retiring the stored default.`,
           ],
           warnings: [],
         }

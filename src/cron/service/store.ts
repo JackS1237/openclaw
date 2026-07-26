@@ -296,11 +296,14 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
   }
   const stateOnly = !flushedPendingQuarantine && opts?.stateOnly === true;
   try {
-    await saveCronJobsStore(
+    const committedStoreEpoch = await saveCronJobsStore(
       state.deps.storePath,
       store,
       stateOnly ? { stateOnly: true } : { expectedStoreEpoch: state.storeEpoch },
     );
+    if (!stateOnly && committedStoreEpoch !== undefined) {
+      state.storeEpoch = committedStoreEpoch;
+    }
   } catch (error) {
     if (error instanceof CronStoreEpochMismatchError) {
       // Another process changed ownership/topology. Refuse this stale snapshot

@@ -1,5 +1,6 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -420,6 +421,35 @@ export class CronStoreEpochMismatchError extends Error {
   }
 }
 
+function cronStoreTopologyMatches(rows: CronJobRow[], store: CronStoreFile): boolean {
+  if (rows.length !== store.jobs.length) {
+    return false;
+  }
+  const currentJobs = loadedCronStoreFromRows(rows).store.jobs;
+  return store.jobs.every((job, index) => {
+    const currentJob = currentJobs[index];
+    const normalizedCurrent = currentJob ? normalizeCronJobForSqlite(currentJob) : null;
+    const normalized = normalizeCronJobForSqlite(job);
+    return Boolean(
+      normalizedCurrent &&
+      normalized &&
+      normalizedCurrent.id === normalized.id &&
+      isDeepStrictEqual(
+        cronJobTopologyProjection(normalizedCurrent),
+        cronJobTopologyProjection(normalized),
+      ),
+    );
+  });
+}
+
+function cronJobTopologyProjection(job: CronJob): Record<string, unknown> {
+  const projected = stripJobRuntimeFields(job);
+  if (job.schedule.kind === "every" && job.schedule.anchorMs === undefined) {
+    projected.schedule = { ...job.schedule, anchorMs: job.createdAtMs };
+  }
+  return projected;
+}
+
 /** Materializes retired default ownership without rewriting unrelated cron row fields. */
 export function materializeCronRowAgentOwners(
   db: DatabaseSync,
@@ -460,6 +490,7 @@ export function replaceCronRows(
   store: CronStoreFile,
   options?: { expectedStoreEpoch?: number; bumpStoreEpoch?: boolean },
 ): number {
+  const currentRows = loadCronRows(db, storeKey);
   const currentStoreEpoch = readCronStoreEpoch(db, storeKey);
   if (
     options?.expectedStoreEpoch !== undefined &&
@@ -467,7 +498,8 @@ export function replaceCronRows(
   ) {
     throw new CronStoreEpochMismatchError(options.expectedStoreEpoch, currentStoreEpoch);
   }
-  const nextStoreEpoch = currentStoreEpoch + (options?.bumpStoreEpoch ? 1 : 0);
+  const topologyChanged = !cronStoreTopologyMatches(currentRows, store);
+  const nextStoreEpoch = currentStoreEpoch + (options?.bumpStoreEpoch && topologyChanged ? 1 : 0);
   // Persist the epoch before replacing rows so an empty partition retains the
   // same stale-writer barrier as a nonempty one.
   writeCronStoreEpoch(db, storeKey, nextStoreEpoch);
@@ -509,6 +541,7 @@ export function upsertCronJobRow(
       .values(values)
       .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
   );
+  writeCronStoreEpoch(db, storeKey, readCronStoreEpoch(db, storeKey) + 1);
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */

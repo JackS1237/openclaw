@@ -285,6 +285,12 @@ describe("persisted implicit-main roster migration", () => {
         'Assigned ambient Talk sessions to agent "writer".',
         "Removed retired agents.entries.*.default markers.",
       ],
+      insertedPaths: [
+        ["agents", "entries", "writer", "workspace"],
+        ["agents", "defaults", "heartbeat", "agentId"],
+        ["agents", "defaults", "systemAgent", "agentId"],
+        ["talk", "agentId"],
+      ],
       retainedLegacyDefaultAgentId: "writer",
     });
   });

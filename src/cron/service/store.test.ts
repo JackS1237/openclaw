@@ -205,7 +205,7 @@ describe("cron service store seam coverage", () => {
       storePath,
       legacyDefaultAgentId: "ops",
     });
-    await saveCronStore(storePath, { version: 1, jobs: [] }, { expectedStoreEpoch: 1 });
+    await saveCronStore(storePath, { version: 1, jobs: [] }, { expectedStoreEpoch: 2 });
 
     await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
     expect(state.store?.jobs).toEqual([]);
@@ -408,7 +408,7 @@ describe("cron service store seam coverage", () => {
 
     await persist(state, { stateOnly: true });
 
-    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, { expectedStoreEpoch: 0 });
+    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, { expectedStoreEpoch: 1 });
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({

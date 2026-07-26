@@ -12,6 +12,7 @@ type MigrationResult = {
   config: unknown;
   changed: boolean;
   diagnostics: string[];
+  insertedPaths?: string[][];
   retainedLegacyDefaultAgentId?: string;
 };
 
@@ -218,6 +219,7 @@ export function migratePersistedImplicitMainRoster(
       ? candidateLegacyDefaultAgentId
       : undefined;
   let materializationWarnings = listLegacyOwnershipWarnings(raw as OpenClawConfig);
+  let insertedPaths: string[][] = [];
   if (Object.keys(roster).length > 1 && legacyDefaultAgentId) {
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
@@ -226,6 +228,7 @@ export function migratePersistedImplicitMainRoster(
     );
     nextRoot = materialized.config as Record<string, unknown>;
     materializationWarnings = [...materializationWarnings, ...materialized.warnings];
+    insertedPaths = materialized.insertedPaths;
     diagnostics.push(...materialized.changes);
     changed = changed || materialized.changes.length > 0;
     if (markerFreeFleet && !explicitOwnership && materialized.changes.length === 0) {
@@ -266,6 +269,7 @@ export function migratePersistedImplicitMainRoster(
     config,
     changed,
     diagnostics,
+    ...(insertedPaths.length > 0 ? { insertedPaths } : {}),
     ...(retainedLegacyDefaultAgentId ? { retainedLegacyDefaultAgentId } : {}),
   };
 }

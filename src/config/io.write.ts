@@ -169,14 +169,7 @@ export async function writeConfigFileFromContext(
         .filter(
           (migration) => migration.retainedLegacyDefaultAgentId === retainedLegacyDefaultAgentId,
         )
-        .map((migration) =>
-          materializeLegacyAgentOwnershipForActiveChannelsResult(
-            migration.config as OpenClawConfig,
-            retainedLegacyDefaultAgentId,
-            deps.env,
-          ),
-        )
-        .find((materialized) => materialized.insertedPaths.length > 0)?.insertedPaths ?? [])
+        .find((migration) => (migration.insertedPaths?.length ?? 0) > 0)?.insertedPaths ?? [])
     : [];
   const previousSoleAgentId = tryResolveDefaultAgentId(snapshot.config);
   const previousAgentCount = listAgentEntries(snapshot.config).length;
@@ -221,16 +214,17 @@ export async function writeConfigFileFromContext(
     nextConfig = materialized.config;
     transitionInsertedPaths = [...transitionInsertedPaths, ...materialized.insertedPaths];
   }
-  const topologyOwnershipPaths = entersMultiAgent
-    ? [
-        ...new Map(
-          [...legacySourceInsertedPaths, ...transitionInsertedPaths].map((ownershipPath) => [
-            ownershipPath.join("\0"),
-            ownershipPath,
-          ]),
-        ).values(),
-      ]
-    : [];
+  const topologyOwnershipPaths =
+    entersMultiAgent || retainedLegacyDefaultAgentId
+      ? [
+          ...new Map(
+            [...legacySourceInsertedPaths, ...transitionInsertedPaths].map((ownershipPath) => [
+              ownershipPath.join("\0"),
+              ownershipPath,
+            ]),
+          ).values(),
+        ]
+      : [];
   const explicitSetPaths = [...(options.explicitSetPaths ?? []), ...topologyOwnershipPaths];
   const cronHandoffAgentId =
     retainedLegacyDefaultAgentId && nextAgentIds.has(normalizeAgentId(retainedLegacyDefaultAgentId))

@@ -202,14 +202,14 @@ export async function saveCronJobsStore(
       },
       { env: opts?.env },
     );
-    return;
+    return undefined;
   }
   assertCronStoreCanPersist(store);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      replaceCronRows(db, storeKey, store, {
+      return replaceCronRows(db, storeKey, store, {
         expectedStoreEpoch: opts?.expectedStoreEpoch,
-        bumpStoreEpoch: opts?.bumpStoreEpoch,
+        bumpStoreEpoch: opts?.bumpStoreEpoch ?? true,
       });
     },
     { env: opts?.env },
@@ -231,10 +231,47 @@ export async function saveCronJobsStoreWithMetadata(
       if (!acquireMetadata(db)) {
         return false;
       }
-      replaceCronRows(db, storeKey, store);
+      replaceCronRows(db, storeKey, store, { bumpStoreEpoch: true });
       return true;
     },
     { env },
+  );
+}
+
+/** Transforms the latest canonical cron rows inside one write transaction. */
+export async function transformCronJobsStore(
+  storePath: string,
+  transform: (loaded: LoadedCronStore) => CronStoreFile | null,
+  options?: {
+    bumpStoreEpoch?: boolean;
+    env?: NodeJS.ProcessEnv;
+    expectedStoreEpoch?: number;
+  },
+): Promise<boolean> {
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const { rows, storeEpoch } = loadCronRowsWithEpoch(db, storeKey);
+      const loaded =
+        rows.length > 0
+          ? loadedCronStoreFromRows(rows, storeEpoch)
+          : emptyLoadedCronStore(storeEpoch);
+      if (options?.expectedStoreEpoch !== undefined && options.expectedStoreEpoch !== storeEpoch) {
+        return false;
+      }
+      const next = transform(loaded);
+      if (!next) {
+        return false;
+      }
+      assertCronStoreCanPersist(next);
+      replaceCronRows(db, storeKey, next, {
+        expectedStoreEpoch: storeEpoch,
+        bumpStoreEpoch: options?.bumpStoreEpoch ?? true,
+      });
+      return true;
+    },
+    { env: options?.env },
   );
 }
 
@@ -260,7 +297,9 @@ export async function transformCronJobsStoreWithMetadata(
       }
       const next = transform(loaded);
       assertCronStoreCanPersist(next);
-      replaceCronRows(db, storeKey, next, { bumpStoreEpoch: options?.bumpStoreEpoch });
+      replaceCronRows(db, storeKey, next, {
+        bumpStoreEpoch: options?.bumpStoreEpoch ?? true,
+      });
       return true;
     },
     { env },

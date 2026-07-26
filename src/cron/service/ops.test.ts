@@ -13,7 +13,7 @@ import { createCronExecutionId } from "../run-id.js";
 import * as cronSchedule from "../schedule.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
-import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
+import { loadCronJobsStoreWithConfigJobs, loadCronStore, saveCronJobsStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
@@ -459,7 +459,55 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
       expect(state.store?.jobs[0]?.agentId).toBe("ops");
-      expect((await loadCronStore(storePath)).jobs[0]?.agentId).toBe("ops");
+      expect(await loadCronStore(storePath)).toMatchObject({
+        jobs: [{ id: "legacy-json-import", agentId: "ops" }],
+      });
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("does not resurrect a loaded record deleted by a newer topology write", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:30:00.000Z");
+    const deletedJob: CronJob = {
+      id: "deleted-after-load",
+      name: "deleted after load",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do not resurrect" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    await saveCronJobsStore(storePath, { version: 1, jobs: [deletedJob] });
+    const loadedBeforeDelete = await loadCronJobsStoreWithConfigJobs(storePath);
+    await saveCronJobsStore(
+      storePath,
+      { version: 1, jobs: [] },
+      { expectedStoreEpoch: loadedBeforeDelete.storeEpoch },
+    );
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce(loadedBeforeDelete);
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await start(state);
+      expect(state.store?.jobs).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs).toEqual([]);
     } finally {
       stop(state);
       loadSpy.mockRestore();
