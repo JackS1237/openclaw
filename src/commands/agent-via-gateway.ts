@@ -36,6 +36,7 @@ import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
+  DEFAULT_MAIN_KEY,
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -99,6 +100,8 @@ type RemoteGatewayRoster = {
 };
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
+  gatewayDispatchConfig?: OpenClawConfig;
+  remoteGatewayContractUnavailable?: boolean;
   remoteGatewayRoster?: RemoteGatewayRoster;
 };
 
@@ -445,19 +448,38 @@ async function normalizeSessionKeyOptsForDispatch(
   }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
-  let agentIdRaw = opts.agent?.trim();
+  const explicitAgentIdRaw = opts.agent?.trim();
+  let agentIdRaw = explicitAgentIdRaw;
   const hasAgentScopedTarget = [rawSessionKey, rawTo].some(
     (value) => classifySessionKeyShape(value) === "agent",
   );
   let selectionCfg: OpenClawConfig | undefined;
   let remoteGatewayRoster: RemoteGatewayRoster | undefined;
-  if (!agentIdRaw && !hasAgentScopedTarget) {
-    let cfg = opts.local === true ? await loadRuntimeConfig() : readGatewayDispatchConfig();
-    if (opts.local !== true && usesRemoteGateway(cfg)) {
-      remoteGatewayRoster = await loadRemoteGatewayRoster(cfg);
-      cfg = applyRemoteGatewayRoster(cfg, remoteGatewayRoster);
-      normalizedOpts = { ...normalizedOpts, remoteGatewayRoster };
+  if (opts.local !== true) {
+    let cfg = readGatewayDispatchConfig();
+    normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg };
+    if (usesRemoteGateway(cfg)) {
+      try {
+        remoteGatewayRoster = await loadRemoteGatewayRoster(cfg);
+      } catch (error) {
+        const hasContractIndependentTarget = Boolean(explicitAgentIdRaw) || hasAgentScopedTarget;
+        if (!hasContractIndependentTarget || !(error instanceof AgentSelectionRequiredError)) {
+          throw error;
+        }
+        normalizedOpts = { ...normalizedOpts, remoteGatewayContractUnavailable: true };
+      }
+      if (remoteGatewayRoster) {
+        cfg = applyRemoteGatewayRoster(cfg, remoteGatewayRoster);
+        normalizedOpts = { ...normalizedOpts, remoteGatewayRoster };
+      }
     }
+    selectionCfg = cfg;
+  }
+  if (!agentIdRaw && !hasAgentScopedTarget) {
+    const cfg =
+      opts.local === true
+        ? await loadRuntimeConfig()
+        : (selectionCfg ?? readGatewayDispatchConfig());
     selectionCfg = cfg;
     const selectedAgentId = await resolveCliAgentId({
       cfg,
@@ -470,11 +492,11 @@ async function normalizeSessionKeyOptsForDispatch(
       implicitSoleAgent && isUnscopedSessionKeySentinel(rawSessionKey)
         ? undefined
         : selectedAgentId;
-    if (!implicitSoleAgent || remoteGatewayRoster) {
+    if (
+      !implicitSoleAgent ||
+      (remoteGatewayRoster && !isUnscopedSessionKeySentinel(rawSessionKey))
+    ) {
       normalizedOpts = { ...normalizedOpts, agent: selectedAgentId };
-      if (remoteGatewayRoster) {
-        normalizedOpts.remoteGatewayRoster = remoteGatewayRoster;
-      }
     }
   }
   const shouldScopeDefaultAgentKey =
@@ -485,11 +507,17 @@ async function normalizeSessionKeyOptsForDispatch(
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig())
       : undefined;
-  const sessionKey = scopeLegacySessionKeyToAgent({
-    agentId: agentIdRaw,
-    sessionKey: normalizedOpts.sessionKey,
-    mainKey: cfg?.session?.mainKey,
-  });
+  const deferUnavailableRemoteMainAlias = Boolean(
+    normalizedOpts.remoteGatewayContractUnavailable &&
+    rawSessionKey?.toLowerCase() === DEFAULT_MAIN_KEY,
+  );
+  const sessionKey = deferUnavailableRemoteMainAlias
+    ? normalizedOpts.sessionKey
+    : scopeLegacySessionKeyToAgent({
+        agentId: agentIdRaw,
+        sessionKey: normalizedOpts.sessionKey,
+        mainKey: cfg?.session?.mainKey,
+      });
   if (sessionKey === normalizedOpts.sessionKey) {
     return normalizedOpts;
   }
@@ -762,7 +790,7 @@ async function agentViaGatewayCommand(
 
   // Scoped gateway turns need core agent/session/gateway fields only. The
   // running gateway owns plugin validation and plugin metadata freshness.
-  let cfg: OpenClawConfig = readGatewayDispatchConfig();
+  let cfg: OpenClawConfig = opts.gatewayDispatchConfig ?? readGatewayDispatchConfig();
   if (opts.remoteGatewayRoster) {
     cfg = applyRemoteGatewayRoster(cfg, opts.remoteGatewayRoster);
   }
@@ -790,21 +818,31 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
+  const preserveUnavailableRemoteMainAlias = Boolean(
+    opts.remoteGatewayContractUnavailable && explicitSessionKey?.toLowerCase() === DEFAULT_MAIN_KEY,
+  );
+  const deferUnavailableRemoteContractSession = Boolean(
+    opts.remoteGatewayContractUnavailable && !explicitSessionKey,
+  );
 
-  const sessionKey = deferExplicitRecipientSession
+  const sessionKey = preserveUnavailableRemoteMainAlias
+    ? explicitSessionKey
+    : deferExplicitRecipientSession || deferUnavailableRemoteContractSession
+      ? undefined
+      : classifySessionKeyShape(explicitSessionKey) === "agent"
+        ? explicitSessionKey
+        : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+            cfg,
+            agentId,
+            to: opts.to,
+            sessionId: opts.sessionId,
+            sessionKey: explicitSessionKey,
+          }).sessionKey;
+  const abortSessionKey = deferUnavailableRemoteContractSession
     ? undefined
-    : classifySessionKeyShape(explicitSessionKey) === "agent"
-      ? explicitSessionKey
-      : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
-          cfg,
-          agentId,
-          to: opts.to,
-          sessionId: opts.sessionId,
-          sessionKey: explicitSessionKey,
-        }).sessionKey;
-  const abortSessionKey = deferExplicitRecipientSession
-    ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
-    : sessionKey;
+    : deferExplicitRecipientSession
+      ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+      : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);

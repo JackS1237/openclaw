@@ -878,6 +878,88 @@ describe("agentCliCommand", () => {
     },
   );
 
+  it("loads the remote session contract when --agent bypasses selection", async () => {
+    const resolveSessionKeyForRequest = vi.fn(() => ({ sessionKey: "agent:ops:remote-main" }));
+    loadAgentSessionModuleMock.mockResolvedValue({ resolveSessionKeyForRequest });
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: undefined,
+          mainKey: "remote-main",
+          scope: "global",
+          agents: [{ id: "ops", name: "Operations" }],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", agent: "ops" }, runtime);
+
+        expect(resolveSessionKeyForRequest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cfg: expect.objectContaining({
+              session: expect.objectContaining({ mainKey: "remote-main", scope: "global" }),
+            }),
+            agentId: "ops",
+          }),
+        );
+        expect(
+          callGateway.mock.calls.map(([request]) => requireRecord(request, "request").method),
+        ).toEqual(["agents.list", "agent"]);
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        session: { mainKey: "local-main", scope: "per-sender" },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("keeps a remote sole-agent global sentinel unscoped", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: [{ id: "ops", name: "Operations" }],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        expect(
+          callGateway.mock.calls.map(([request]) => requireRecord(request, "request").method),
+        ).toEqual(["agents.list", "agent"]);
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("global");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        session: { mainKey: "local-main", scope: "global" },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
   it("requires explicit --agent when the remote roster is unavailable", async () => {
     callGateway.mockRejectedValueOnce(new Error("remote roster unavailable"));
     await withTempStore(
@@ -889,6 +971,118 @@ describe("agentCliCommand", () => {
         });
         expect(callGateway).toHaveBeenCalledTimes(1);
         expect(requireRecord(callGateway.mock.calls[0]?.[0], "request").method).toBe("agents.list");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("uses explicit --agent as the fallback when the remote roster is unavailable", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("remote roster unavailable"))
+      .mockResolvedValueOnce({
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", agent: "ops" }, runtime);
+
+        expect(
+          callGateway.mock.calls.map(([request]) => requireRecord(request, "request").method),
+        ).toEqual(["agents.list", "agent"]);
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("does not resolve the main alias from local config after remote contract failure", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("remote roster unavailable"))
+      .mockResolvedValueOnce({
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand(
+          { message: "hi", agent: "ops", sessionId: "lower-precedence", sessionKey: "main" },
+          runtime,
+        );
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionId).toBe("lower-precedence");
+        expect(params.sessionKey).toBe("main");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        session: { mainKey: "local-main" },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("forwards an explicit session id for remote resolution after contract failure", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("remote roster unavailable"))
+      .mockResolvedValueOnce({
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand(
+          { message: "hi", agent: "ops", sessionId: "remote-session-id" },
+          runtime,
+        );
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionId).toBe("remote-session-id");
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("keeps an agent-scoped target usable when the remote roster is unavailable", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("remote roster unavailable"))
+      .mockResolvedValueOnce({
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
       {
         agents: { list: [{ id: "local-main" }] },
