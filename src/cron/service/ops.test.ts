@@ -514,6 +514,57 @@ describe("cron service ops seam coverage", () => {
     }
   });
 
+  it("retries one epoch conflict and blocks after a second conflict", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-25T12:45:00.000Z");
+    const importedJob: CronJob = {
+      id: "repeated-owner-conflict",
+      name: "repeated owner conflict",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: { nextRunAtMs: now + 60_000 },
+    };
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockResolvedValueOnce({
+        store: { version: 1, jobs: [importedJob] },
+        storeEpoch: 0,
+        configJobs: [importedJob as unknown as Record<string, unknown>],
+        configJobIndexes: [0],
+        configJobRuntimeEntries: [],
+        invalidConfigRows: [],
+      });
+    const transformSpy = vi
+      .spyOn(cronStoreModule, "transformCronJobsStore")
+      .mockResolvedValue(false);
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      legacyDefaultAgentId: "ops",
+      nowMs: () => now,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await expect(start(state)).rejects.toThrow(
+        "cron store changed during legacy owner migration twice",
+      );
+      expect(transformSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      stop(state);
+      loadSpy.mockRestore();
+      transformSpy.mockRestore();
+    }
+  });
+
   it("keeps core add paths on SQLite and leaves legacy JSON for doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-05-20T08:00:00.000Z");

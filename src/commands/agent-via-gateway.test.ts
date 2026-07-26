@@ -89,13 +89,24 @@ async function withTempStore(
 }
 
 function mockGatewaySuccessReply(text = "hello") {
-  callGateway.mockResolvedValue({
-    runId: "idem-1",
-    status: "ok",
-    result: {
-      payloads: [{ text }],
-      meta: { stub: true },
-    },
+  callGateway.mockImplementation(async (requestValue) => {
+    const request = requireRecord(requestValue, "gateway request");
+    if (request.method === "agents.list") {
+      return {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", name: "Main" }],
+      };
+    }
+    return {
+      runId: "idem-1",
+      status: "ok",
+      result: {
+        payloads: [{ text }],
+        meta: { stub: true },
+      },
+    };
   });
 }
 
@@ -337,8 +348,11 @@ describe("agentCliCommand", () => {
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const rosterRequest = requireRecord(callGateway.mock.calls[0]?.[0], "roster request");
+      expect(rosterRequest.method).toBe("agents.list");
+      expect(rosterRequest.scopes).toEqual(["operator.read"]);
+      const request = requireRecord(callGateway.mock.calls[1]?.[0], "gateway request");
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
@@ -761,6 +775,76 @@ describe("agentCliCommand", () => {
         expect(callGateway).not.toHaveBeenCalled();
       },
       { agents: { list: [{ id: "ops" }, { id: "research" }] } },
+    );
+  });
+
+  it("selects from a remote multi-agent roster instead of the local sole roster", async () => {
+    const selectAgent = vi.fn(async () => "research");
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: undefined,
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return {
+          runId: "idem-1",
+          status: "ok",
+          result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+        };
+      }
+      throw new Error(`unexpected gateway method ${String(request.method)}`);
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi" }, runtime, {
+          agentSelection: { interactive: true, selectAgent },
+        });
+
+        expect(selectAgent).toHaveBeenCalledWith({
+          message: "Select an agent for agent turn",
+          options: [
+            { value: "ops", label: "Operations (ops)" },
+            { value: "research", label: "Research (research)" },
+          ],
+        });
+        expect(
+          callGateway.mock.calls.map(([request]) => requireRecord(request, "request").method),
+        ).toEqual(["agents.list", "agent"]);
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        expect(requireRecord(agentRequest.params, "agent params").agentId).toBe("research");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("requires explicit --agent when the remote roster is unavailable", async () => {
+    callGateway.mockRejectedValueOnce(new Error("remote roster unavailable"));
+    await withTempStore(
+      async () => {
+        await expect(agentCliCommand({ message: "hi" }, runtime)).rejects.toMatchObject({
+          code: "AGENT_SELECTION_REQUIRED",
+          surface: "remote gateway agent turn",
+          hint: expect.stringContaining("--agent"),
+        });
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(requireRecord(callGateway.mock.calls[0]?.[0], "request").method).toBe("agents.list");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
     );
   });
 

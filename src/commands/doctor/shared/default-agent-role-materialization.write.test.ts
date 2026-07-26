@@ -179,6 +179,54 @@ describe("default role materialization authored writes", () => {
     expect(persisted.agents?.entries).toMatchObject({ ops: {}, research: {} });
   });
 
+  it("refuses fallback materialization into include-owned bindings", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-binding-include-refusal-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const bindingsPath = path.join(root, "bindings.json5");
+    const bindingsRaw = `${JSON.stringify([
+      { agentId: "ops", match: { channel: "telegram", accountId: "work" } },
+    ])}\n`;
+    const configRaw = `${JSON.stringify({
+      agents: { entries: { ops: {} } },
+      bindings: { $include: "./bindings.json5" },
+    })}\n`;
+    await fs.writeFile(bindingsPath, bindingsRaw, "utf-8");
+    await fs.writeFile(configPath, configRaw, "utf-8");
+    const env = {
+      HOME: root,
+      DISCORD_BOT_TOKEN: "env-only-token",
+      OPENCLAW_TEST_FAST: "1",
+    } as NodeJS.ProcessEnv;
+    const io = createConfigIO({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        entries: { ...snapshot.config.agents?.entries, research: {} },
+      },
+    };
+
+    await expect(
+      io.writeConfigFile(nextConfig, {
+        baseSnapshot: snapshot,
+        explicitSetPaths: [["agents", "entries"]],
+        explicitSetValueSource: nextConfig,
+      }),
+    ).rejects.toThrow(
+      'Add {"agentId":"ops","match":{"channel":"discord","accountId":"*"}} to the bindings include',
+    );
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(configRaw);
+    await expect(fs.readFile(bindingsPath, "utf-8")).resolves.toBe(bindingsRaw);
+  });
+
   it("persists initially materialized ownership paths when stamping a legacy fleet", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-stamp-paths-"));
     roots.push(root);

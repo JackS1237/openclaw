@@ -34,27 +34,46 @@ async function materializeLoadedLegacyDefaultAgentOwners(
     legacyDefaultAgentId,
     records: jobs as unknown as Array<Record<string, unknown>>,
     persistRecords: async (records) => {
-      let rewritten = 0;
-      await transformCronJobsStore(
-        state.deps.storePath,
-        (current) => {
-          const currentRecords = current.store.jobs as unknown as Array<Record<string, unknown>>;
-          const currentIds = new Set(
-            currentRecords.flatMap((record) => (typeof record.id === "string" ? [record.id] : [])),
-          );
-          const missingRecords = records.filter(
-            (record) => typeof record.id === "string" && !currentIds.has(record.id),
-          );
-          const merged = [...currentRecords, ...missingRecords];
-          rewritten = materializeLegacyDefaultCronJobOwnersInRecords(merged, legacyDefaultAgentId);
-          if (missingRecords.length === 0 && rewritten === 0) {
-            return null;
-          }
-          return { version: 1, jobs: merged as unknown as CronJob[] };
-        },
-        { bumpStoreEpoch: true, expectedStoreEpoch: state.storeEpoch },
-      );
-      return rewritten;
+      let candidateRecords = records;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let transformRan = false;
+        let rewritten = 0;
+        const expectedStoreEpoch = state.storeEpoch;
+        await transformCronJobsStore(
+          state.deps.storePath,
+          (current) => {
+            transformRan = true;
+            const currentRecords = current.store.jobs as unknown as Array<Record<string, unknown>>;
+            const currentIds = new Set(
+              currentRecords.flatMap((record) =>
+                typeof record.id === "string" ? [record.id] : [],
+              ),
+            );
+            const missingRecords = candidateRecords.filter(
+              (record) => typeof record.id === "string" && !currentIds.has(record.id),
+            );
+            const merged = [...currentRecords, ...missingRecords];
+            rewritten = materializeLegacyDefaultCronJobOwnersInRecords(
+              merged,
+              legacyDefaultAgentId,
+            );
+            if (missingRecords.length === 0 && rewritten === 0) {
+              return null;
+            }
+            return { version: 1, jobs: merged as unknown as CronJob[] };
+          },
+          { bumpStoreEpoch: true, expectedStoreEpoch },
+        );
+        if (transformRan) {
+          return rewritten;
+        }
+        if (attempt === 1) {
+          throw new Error("cron store changed during legacy owner migration twice; retry startup");
+        }
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        candidateRecords = (state.store?.jobs ?? []) as unknown as Array<Record<string, unknown>>;
+      }
+      return 0;
     },
   });
 }
