@@ -116,7 +116,7 @@ export class CronService implements CronServiceContract {
   }
 
   async reloadForConfigAdoption() {
-    await ops.reloadForConfigAdoption(this.state);
+    await lifecycleOps.reloadForConfigAdoption(this.state);
   }
 
   pauseScheduling() {
