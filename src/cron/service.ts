@@ -30,7 +30,7 @@ export class CronService implements CronServiceContract {
   private startInProgress = 0;
   private startState: { generation: number; promise: Promise<void> } | null = null;
   private lifecycleGeneration = 0;
-  private liveServiceRegistration: { unregister: () => void } | null = null;
+  private liveServiceRegistration: ReturnType<typeof registerLiveCronService> | null = null;
 
   constructor(deps: CronServiceDeps) {
     this.state = createCronServiceState(deps);
@@ -67,14 +67,17 @@ export class CronService implements CronServiceContract {
   private async startOnce(generation: number) {
     this.startInProgress += 1;
     this.state.schedulerStarted = false;
+    let registration = this.liveServiceRegistration;
     try {
-      if (!this.liveServiceRegistration) {
-        const registration = registerLiveCronService(this.state.deps.storePath, this);
+      if (!registration) {
+        registration = registerLiveCronService(this.state.deps.storePath, this);
         this.liveServiceRegistration = registration;
         await registration.ready;
         if (generation !== this.lifecycleGeneration) {
-          registration.unregister();
-          this.liveServiceRegistration = null;
+          if (this.liveServiceRegistration === registration) {
+            registration.unregister();
+            this.liveServiceRegistration = null;
+          }
           return;
         }
       }
@@ -86,8 +89,12 @@ export class CronService implements CronServiceContract {
       this.state.schedulerStarted = !this.state.stopped;
     } finally {
       this.startInProgress -= 1;
-      if (!this.state.schedulerStarted) {
-        this.liveServiceRegistration?.unregister();
+      if (
+        !this.state.schedulerStarted &&
+        registration &&
+        this.liveServiceRegistration === registration
+      ) {
+        registration.unregister();
         this.liveServiceRegistration = null;
       }
     }

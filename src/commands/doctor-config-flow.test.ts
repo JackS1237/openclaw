@@ -1683,6 +1683,37 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents?.ownership).toBe("explicit");
   });
 
+  it("retains the raw legacy owner across compatibility repair before remigration", async () => {
+    const sourceConfigBeforeMigrations = {
+      agents: { entries: { ops: {}, research: { default: true } } },
+      channels: { telegram: { enabled: true } },
+      gateway: { bind: "localhost" },
+      talk: { provider: "test" },
+    };
+    const strippedCandidate = {
+      ...sourceConfigBeforeMigrations,
+      agents: { entries: { ops: {}, research: {} } },
+    };
+
+    const result = await runDoctorConfigWithInput({
+      config: strippedCandidate,
+      parsedConfig: strippedCandidate,
+      sourceConfigBeforeMigrations,
+      preflightMode: "compat",
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.agents?.entries?.ops?.workspace).toBeUndefined();
+    expect(result.cfg.agents?.entries?.research?.workspace).toBeTruthy();
+    expect(result.cfg.bindings).toContainEqual({
+      agentId: "research",
+      match: { channel: "telegram", accountId: "*" },
+    });
+    expect(result.cfg.agents?.defaults?.heartbeat?.agentId).toBe("research");
+    expect(result.cfg.agents?.defaults?.systemAgent?.agentId).toBe("research");
+  });
+
   it("preserves shared all-agent heartbeat enrollment during materialization", async () => {
     const rawConfig = {
       agents: {

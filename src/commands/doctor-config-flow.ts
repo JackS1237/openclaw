@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -187,14 +188,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
-  const legacyStep = applyLegacyCompatibilityStep({
-    snapshot,
-    state,
-    shouldRepair,
-    doctorFixCommand,
-  });
-  state = legacyStep.state;
-  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const rawRosterMigrations = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed]
     .filter((source) => source !== undefined)
     .map((source) => migratePersistedImplicitMainRoster(source));
@@ -203,18 +196,30 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const legacyDefaultAgentId = rawRosterMigrations
     .map((migration) => migration.retainedLegacyDefaultAgentId)
     .find((agentId) => agentId !== undefined);
+  const legacyStep = applyLegacyCompatibilityStep({
+    snapshot,
+    state,
+    shouldRepair,
+    doctorFixCommand,
+  });
+  state = legacyStep.state;
+  if (legacyDefaultAgentId) {
+    retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
+    retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
+  }
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
-    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
+    const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
     const stampsExplicitOwnership =
       legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
-        ...state.candidate,
+        ...migrated,
         agents: {
           ...candidateAgents,
           ...(stampsExplicitOwnership ? { ownership: "explicit" as const } : {}),

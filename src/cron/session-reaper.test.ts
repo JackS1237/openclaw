@@ -569,6 +569,29 @@ describe("sweepCronRunSessions", () => {
     ).toEqual({ swept: false, pruned: 0 });
   });
 
+  it("does not let a partial shared-store sweep throttle another owner", async () => {
+    const now = Date.now();
+    const first = await sweepCronRunSessionsImpl({
+      agentId: "main",
+      agentIds: ["main"],
+      defaultAgentId: "main",
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+    });
+    const second = await sweepCronRunSessionsImpl({
+      agentId: "main",
+      agentIds: ["ops"],
+      defaultAgentId: "main",
+      sessionStorePath: storePath,
+      nowMs: now + 1_000,
+      log,
+    });
+
+    expect(first.swept).toBe(true);
+    expect(second.swept).toBe(true);
+  });
+
   it("throttles per store path", async () => {
     const now = Date.now();
     const otherPath = path.join(tmpDir, "sessions-other.json");

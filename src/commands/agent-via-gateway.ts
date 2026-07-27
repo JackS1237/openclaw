@@ -518,6 +518,7 @@ async function normalizeSessionKeyOptsForDispatch(
             cfg,
             runtime,
             surface: "agent turn",
+            requireExplicit: remoteGatewayRoster?.selectionRequired === true,
             deps: opts.json
               ? { ...deps?.agentSelection, interactive: false }
               : deps?.agentSelection,
@@ -526,14 +527,12 @@ async function normalizeSessionKeyOptsForDispatch(
       ? remoteGatewayRoster.ownership === "sole" ||
         (!remoteGatewayRoster.ownership && remoteGatewayRoster.agentIds.length === 1)
       : tryResolveSoleAgentId(cfg) === selectedAgentId;
-    agentIdRaw =
-      implicitSoleAgent && isUnscopedSessionKeySentinel(rawSessionKey)
-        ? undefined
-        : selectedAgentId;
-    if (
-      !implicitSoleAgent ||
-      (remoteGatewayRoster && !isUnscopedSessionKeySentinel(rawSessionKey))
-    ) {
+    const implicitRemoteGlobalSession =
+      !explicitAgentIdRaw && remoteGatewayRoster?.scope === "global" && rawSessionKey === undefined;
+    const unscopedSession =
+      isUnscopedSessionKeySentinel(rawSessionKey) || implicitRemoteGlobalSession;
+    agentIdRaw = implicitSoleAgent && unscopedSession ? undefined : selectedAgentId;
+    if (!implicitSoleAgent || (remoteGatewayRoster && !unscopedSession)) {
       normalizedOpts = { ...normalizedOpts, agent: selectedAgentId };
     }
   }
@@ -819,7 +818,20 @@ async function agentViaGatewayCommand(
 ) {
   const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
+  const remoteRosterIsSole =
+    opts.remoteGatewayRoster?.ownership === "sole" ||
+    (!opts.remoteGatewayRoster?.ownership && opts.remoteGatewayRoster?.agentIds.length === 1);
+  const hasImplicitRemoteGlobalTarget =
+    opts.remoteGatewayRoster?.scope === "global" &&
+    !opts.remoteGatewayRoster.selectionRequired &&
+    remoteRosterIsSole;
+  if (
+    !opts.to &&
+    !opts.sessionId &&
+    !opts.agent &&
+    !explicitSessionKey &&
+    !hasImplicitRemoteGlobalTarget
+  ) {
     throw new Error(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );

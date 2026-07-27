@@ -126,10 +126,14 @@ export function materializeLegacyDefaultAgentRoles(
         workspaceNeedsPin || configuredWorkspace
           ? path.join(resolveUserPath(workspace, options.env), ".openclaw", "extensions")
           : undefined;
-      const rawPluginPaths = next.plugins?.load?.paths;
+      const rawPlugins = next.plugins as unknown;
+      const rawPluginLoad = isRecord(rawPlugins) ? rawPlugins.load : undefined;
+      const rawPluginPaths = isRecord(rawPluginLoad) ? rawPluginLoad.paths : undefined;
       const pluginPaths = Array.isArray(rawPluginPaths) ? rawPluginPaths : [];
       const canMaterializePluginPath =
-        rawPluginPaths === undefined || Array.isArray(rawPluginPaths);
+        (rawPlugins === undefined || isRecord(rawPlugins)) &&
+        (rawPluginLoad === undefined || isRecord(rawPluginLoad)) &&
+        (rawPluginPaths === undefined || Array.isArray(rawPluginPaths));
       const preservePluginPath =
         pluginPath !== undefined && canMaterializePluginPath && fs.existsSync(pluginPath);
       next = {

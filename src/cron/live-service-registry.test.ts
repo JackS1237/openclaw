@@ -143,4 +143,37 @@ describe("live cron ownership handoff", () => {
     await start;
     expect(cron.getLoadedJobs()).toBeUndefined();
   });
+
+  it("keeps the restarted generation registered after stale cleanup finishes", async () => {
+    const storePath = `/tmp/openclaw-live-cron-restart-${Date.now()}.json`;
+    const blockingHandoff = beginLegacyDefaultOwnerHandoff({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    const cron = new CronService({
+      storePath,
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const staleStart = cron.start();
+    await Promise.resolve();
+    cron.stop();
+    const restarted = cron.start();
+    blockingHandoff.release();
+    await Promise.all([staleStart, restarted]);
+
+    const beginSpy = vi.spyOn(cron, "beginLegacyDefaultAgentOwnerHandoff");
+    const verificationHandoff = beginLegacyDefaultOwnerHandoff({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    await verificationHandoff.drainAndSeal();
+    expect(beginSpy).toHaveBeenCalledOnce();
+    verificationHandoff.release();
+    cron.stop();
+  });
 });

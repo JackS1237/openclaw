@@ -413,6 +413,7 @@ export function createOpenClawTools(
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
+    agentId: sessionAgentId,
     agentSessionKey: options?.agentSessionKey,
     agentChannel: options?.agentChannel,
     agentAccountId: options?.agentAccountId,

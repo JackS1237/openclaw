@@ -287,6 +287,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
   });
 
+  it("accepts an explicit owner without a session key on a multi-agent fleet", () => {
+    expect(() =>
+      createNodesTool({
+        agentId: "ops",
+        config: {
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("requires an explicit node for describe and points to status", async () => {
     const tool = createNodesTool();
 

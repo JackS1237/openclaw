@@ -91,7 +91,7 @@ describe("prepared agent model registry", () => {
       agentId: "worker",
       agentDir: "/agents/worker",
       config: {},
-      inheritedAuthDir: "/agents/main",
+      inheritedAuthDir: "/agents/worker",
       workspaceDir: "/workspace",
     });
     expect(mocks.activateSnapshot).not.toHaveBeenCalled();

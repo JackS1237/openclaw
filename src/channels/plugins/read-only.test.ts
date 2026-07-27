@@ -490,6 +490,24 @@ afterAll(() => {
 });
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
+  it("does not invent a workspace owner for an explicit multi-agent fleet", () => {
+    expect(() =>
+      listReadOnlyChannelPluginsForConfig(
+        {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: { workspace: "/tmp/ops-workspace" },
+              research: { workspace: "/tmp/research-workspace" },
+            },
+          },
+          channels: { telegram: { enabled: true } },
+        },
+        { includePersistedAuthState: false },
+      ),
+    ).not.toThrow();
+  });
+
   it("keeps built plugin loader candidates inside the installed package dist root", () => {
     const packageRoot = path.join(makeTempDir(), "node_modules", "openclaw");
     const importerPath = path.join(packageRoot, "dist", "read-only-B4EkEtUx.js");

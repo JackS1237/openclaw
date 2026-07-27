@@ -1077,6 +1077,70 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("keeps an omitted remote sole-agent global session unscoped", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          ownership: "sole",
+          selectionRequired: false,
+          mainKey: "remote-main",
+          scope: "global",
+          agents: [{ id: "ops", name: "Operations" }],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        session: { mainKey: "local-main", scope: "per-sender" },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("does not treat an explicitly owned one-agent global roster as implicit", async () => {
+    callGateway.mockResolvedValueOnce({
+      defaultId: "ops",
+      ownership: "explicit",
+      selectionRequired: true,
+      mainKey: "remote-main",
+      scope: "global",
+      agents: [{ id: "ops", name: "Operations" }],
+    });
+
+    await withTempStore(
+      async () => {
+        await expect(agentCliCommand({ message: "hi", json: true }, runtime)).rejects.toMatchObject(
+          {
+            code: "AGENT_SELECTION_REQUIRED",
+            surface: "agent turn",
+          },
+        );
+        expect(callGateway).toHaveBeenCalledTimes(1);
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
   it("requires explicit --agent when the remote roster is unavailable", async () => {
     callGateway.mockRejectedValueOnce(new Error("remote roster unavailable"));
     await withTempStore(

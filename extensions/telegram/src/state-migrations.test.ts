@@ -113,10 +113,10 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy message-cache import for the runtime sidecar path", async () => {
+  it("detects legacy message-cache import for Doctor's migration owner", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = resolveStorePath(undefined, { env, agentId: "main" });
+    const storePath = resolveStorePath(undefined, { env, agentId: "ops" });
     const persistedPath = resolveTelegramMessageCachePath(storePath);
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
@@ -151,10 +151,15 @@ describe("telegram state migrations", () => {
 
       const cfg = {
         agents: {
-          list: [{ id: "ops", default: true }],
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
         },
       } as OpenClawConfig;
-      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const plans = await detectTelegramLegacyStateMigrations({
+        cfg,
+        env,
+        migrationAgentId: "ops",
+      });
       const messageCachePlan = plans.find(
         (plan) =>
           plan.kind === "plugin-state-import" &&

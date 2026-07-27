@@ -9,16 +9,19 @@ import { resolveUserPath } from "../utils.js";
 import {
   listAgentEntries,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveSoleAgentId,
 } from "./agent-scope.js";
 
-/** Lists unique workspace directories for configured agents and the default agent. */
+/** Lists unique workspace directories for every configured agent or the implicit sole agent. */
 export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
   const dirs = new Set<string>();
   for (const entry of listAgentEntries(cfg)) {
     dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
   }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    dirs.add(resolveAgentWorkspaceDir(cfg, soleAgentId));
+  }
   return [...dirs];
 }
 

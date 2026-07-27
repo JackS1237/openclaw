@@ -354,9 +354,10 @@ export async function updateLoadedJob(params: {
         `cron job agentId ${configuredAgentId} does not match sessionKey owner ${scopedAgentId}`,
       );
     }
-    if ("sessionKey" in patch && scopedAgentId) {
+    if (scopedAgentId) {
       // A scoped session-key retarget is itself an ownership retarget. Persist
-      // the same owner in agentId so timer and session-store routing agree.
+      // the same owner in agentId so timer and session-store routing agree,
+      // including when an agentId-only patch attempts to clear the owner.
       nextJob.agentId = scopedAgentId;
     }
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));

@@ -112,7 +112,13 @@ export async function reloadForConfigAdoption(state: CronServiceState) {
     await ensureLoaded(state, { skipRecompute: true });
     const legacyDefaultAgentId = resolveCurrentDefaultAgentId(state);
     if (legacyDefaultAgentId) {
-      await materializeLoadedLegacyDefaultAgentOwners(state, legacyDefaultAgentId);
+      const migration = await materializeLoadedLegacyDefaultAgentOwners(
+        state,
+        legacyDefaultAgentId,
+      );
+      if (migration.warnings.length > 0) {
+        throw new Error(migration.warnings.join("\n"));
+      }
     }
     await refreshLegacyDefaultAgentOwnerHandoff(state);
   } finally {

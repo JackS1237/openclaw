@@ -19,7 +19,7 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-const lastSweepAtMsByTarget = new Map<string, number>();
+const lastSweepAtMsByTargetOwner = new Map<string, number>();
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
@@ -73,27 +73,32 @@ export async function sweepCronRunSessions(params: {
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
   });
-  // One physical database gets one sweep, even when it contains many scoped owners.
-  const targetKey = resolvedTarget.path;
-  const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
+  const requestedOwners = new Set(
+    (params.agentIds ?? [params.agentId]).map((agentId) => normalizeAgentId(agentId)),
+  );
+  const throttleKeys = [...requestedOwners].map((owner) => `${resolvedTarget.path}\0${owner}`);
 
-  // Timer ticks can be frequent; throttle per physical store target to avoid
-  // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  // Partial shared-store sweeps must not consume another owner's throttle.
+  if (
+    !params.force &&
+    throttleKeys.every((key) => {
+      const lastSweepAtMs = lastSweepAtMsByTargetOwner.get(key) ?? 0;
+      return now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS;
+    })
+  ) {
     return { swept: false, pruned: 0 };
   }
 
   // Throttle attempts, not only successful sweeps. A broken session store must
   // not turn frequent timer ticks into an unbounded persistence-error loop.
-  lastSweepAtMsByTarget.set(targetKey, now);
+  for (const key of throttleKeys) {
+    lastSweepAtMsByTargetOwner.set(key, now);
+  }
 
   let pruned = 0;
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
-    const requestedOwners = new Set(
-      (params.agentIds ?? [params.agentId]).map((agentId) => normalizeAgentId(agentId)),
-    );
     const sharedUnscopedOwner =
       resolvedTarget.shared && params.defaultAgentId
         ? normalizeAgentId(params.defaultAgentId)
@@ -187,7 +192,7 @@ export async function sweepCronRunSessions(params: {
 
 /** Resets per-target reaper throttles between tests. */
 function resetReaperThrottle(): void {
-  lastSweepAtMsByTarget.clear();
+  lastSweepAtMsByTargetOwner.clear();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

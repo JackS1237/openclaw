@@ -180,19 +180,29 @@ export async function setupCommand(
   const configuredWorkspace = hasConfiguredWorkspace
     ? resolveAgentWorkspaceDir(resolvedConfig, setupAgentId)
     : undefined;
+  const requestsWorkspaceChange =
+    desiredWorkspace !== undefined && configuredWorkspace !== desiredWorkspace;
+  const explicitAgentWorkspaceOverride =
+    snapshot.exists && requestsWorkspaceChange && Boolean(opts?.agent?.trim());
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  if (explicitAgentWorkspaceOverride && includeOwnsRoster) {
+    throw new Error(
+      `Cannot set agents.entries.${setupAgentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
+    );
+  }
 
   const workspace =
     desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
   // Bare setup is observational for an established roster. Only a caller
   // override or fresh bootstrap owns a persisted workspace change.
-  const shouldWriteWorkspace =
-    !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
+  const shouldWriteWorkspace = !snapshot.exists || requestsWorkspaceChange;
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
   const writeInheritedWorkspaceOverride =
     snapshot.exists &&
     shouldWriteWorkspace &&
     !defaultEntryWorkspace &&
-    configIncludeOwnsAgentRoster(snapshot);
+    includeOwnsRoster &&
+    !explicitAgentWorkspaceOverride;
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -226,7 +236,9 @@ export async function setupCommand(
         ...next,
         agents: {
           ...agents,
-          defaults: { ...agents.defaults, workspace },
+          ...(explicitAgentWorkspaceOverride
+            ? {}
+            : { defaults: { ...agents.defaults, workspace } }),
           ...(entries ? { entries } : {}),
         },
       };
@@ -272,7 +284,11 @@ export async function setupCommand(
     } else {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
-        updates.push("set agents.defaults.workspace");
+        updates.push(
+          explicitAgentWorkspaceOverride
+            ? `set agents.entries.${setupAgentId}.workspace`
+            : "set agents.defaults.workspace",
+        );
       }
       if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");

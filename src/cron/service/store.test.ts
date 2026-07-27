@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
+import * as legacyOwnerMigrationModule from "../legacy-default-agent-owner-migration.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { CronStoreEpochMismatchError, loadCronStore, saveCronStore } from "../store.js";
@@ -267,6 +268,21 @@ describe("cron service store seam coverage", () => {
       id: "lazy-ownerless",
       agentId: "ops",
     });
+  });
+
+  it("aborts config adoption when legacy-owner materialization cannot persist", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "ownerless-warning" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    vi.spyOn(legacyOwnerMigrationModule, "materializeLegacyDefaultCronJobOwners").mockResolvedValue(
+      {
+        changes: [],
+        warnings: ["forced epoch conflict"],
+      },
+    );
+
+    await expect(reloadForConfigAdoption(state)).rejects.toThrow("forced epoch conflict");
   });
 
   it("refuses a stale state-only write and preserves replacement runtime state", async () => {

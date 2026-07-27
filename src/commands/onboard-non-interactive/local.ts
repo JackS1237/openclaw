@@ -170,6 +170,7 @@ export async function runNonInteractiveLocalSetup(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
   baseHash?: string;
+  agentRosterIncludeOwned?: boolean;
 }) {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
@@ -270,7 +271,26 @@ export async function runNonInteractiveLocalSetup(params: {
     runtime,
     selectionDeps: { interactive: false },
   });
-  nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir);
+  const explicitWorkspaceRequested =
+    typeof opts.workspace === "string" && opts.workspace.trim().length > 0;
+  const currentTarget = resolveOnboardingAgentTarget(created.config, created.agentId);
+  if (
+    params.agentRosterIncludeOwned === true &&
+    explicitWorkspaceRequested &&
+    currentTarget.workspaceDir !== requestedWorkspaceDir
+  ) {
+    throw new Error(
+      `Cannot set agents.entries.${created.agentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
+    );
+  }
+  nextConfig =
+    params.agentRosterIncludeOwned === true && explicitWorkspaceRequested
+      ? created.config
+      : applyLocalSetupWorkspaceConfig(
+          created.config,
+          requestedWorkspaceDir,
+          explicitWorkspaceRequested ? { agentId: created.agentId } : {},
+        );
   // First-agent creation is the first permitted config mutation. Preserve its
   // resulting hash so the canonical wizard write still rejects foreign edits.
   const effectiveBaseHash = created.configHash ?? baseHash;

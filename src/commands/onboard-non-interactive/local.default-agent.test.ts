@@ -202,7 +202,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
   });
 
-  it("provisions and reports the keyed default agent while preserving the global workspace", async () => {
+  it("targets the selected keyed agent when --workspace matches the inherited default", async () => {
     const baseConfig = {
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
@@ -237,17 +237,52 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         nextConfig: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({ workspace: "/tmp/global-workspace" }),
+            }),
           }),
         }),
       }),
     );
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      "/tmp/ops-workspace",
+      "/tmp/global-workspace",
       runtime,
       expect.objectContaining({ agentId: "ops" }),
     );
     expect(mocks.logJson).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+      expect.objectContaining({ workspaceDir: "/tmp/global-workspace" }),
     );
+  });
+
+  it("rejects changing an include-owned selected agent workspace", async () => {
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          agent: "ops",
+          workspace: "/tmp/new-ops-workspace",
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+        },
+        runtime,
+        agentRosterIncludeOwned: true,
+        baseConfig: {
+          agents: {
+            ownership: "explicit",
+            entries: {
+              ops: { workspace: "/tmp/ops-workspace" },
+              research: {},
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "Cannot set agents.entries.ops.workspace because the agent roster is $include-owned",
+    );
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
   });
 });

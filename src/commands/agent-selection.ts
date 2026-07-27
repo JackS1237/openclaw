@@ -38,6 +38,7 @@ export async function resolveCliAgentId(params: {
   agentInput?: string;
   surface: string;
   flagName?: string;
+  requireExplicit?: boolean;
   deps?: CliAgentSelectionDeps;
 }): Promise<string> {
   const explicit = params.agentInput?.trim();
@@ -50,7 +51,7 @@ export async function resolveCliAgentId(params: {
     return normalized;
   }
   const soleAgentId = tryResolveSoleAgentId(params.cfg);
-  if (soleAgentId) {
+  if (soleAgentId && params.requireExplicit !== true) {
     return soleAgentId;
   }
   const flagName = params.flagName ?? "--agent <id>";

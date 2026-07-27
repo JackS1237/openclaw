@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type AgentWorkspaceOwnershipPin = {
@@ -40,10 +41,15 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
   const workspace = resolveAgentWorkspaceDir(params.sourceConfig, agentId, params.env);
   entries[entryKey!] = { ...entry, workspace };
   const pluginPath = path.join(workspace, ".openclaw", "extensions");
-  const rawPluginPaths = params.targetConfig.plugins?.load?.paths;
+  const rawPlugins = params.targetConfig.plugins as unknown;
+  const rawPluginLoad = isRecord(rawPlugins) ? rawPlugins.load : undefined;
+  const rawPluginPaths = isRecord(rawPluginLoad) ? rawPluginLoad.paths : undefined;
   const pluginPaths = Array.isArray(rawPluginPaths) ? rawPluginPaths : [];
   const preservePluginPath =
-    (rawPluginPaths === undefined || Array.isArray(rawPluginPaths)) && fs.existsSync(pluginPath);
+    (rawPlugins === undefined || isRecord(rawPlugins)) &&
+    (rawPluginLoad === undefined || isRecord(rawPluginLoad)) &&
+    (rawPluginPaths === undefined || Array.isArray(rawPluginPaths)) &&
+    fs.existsSync(pluginPath);
   return {
     config: {
       ...params.targetConfig,

@@ -51,6 +51,8 @@ vi.mock("./agent-scope.js", () => ({
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({

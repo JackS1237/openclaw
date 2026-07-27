@@ -181,6 +181,9 @@ describe("cron agent ownership reloads", () => {
         legacyJob("clear-owner"),
         legacyJob("unavailable-owner"),
         { ...legacyJob("retarget-owner"), agentId: "main" },
+        { ...legacyJob("clear-explicit-empty"), agentId: "main" },
+        { ...legacyJob("clear-explicit-whitespace"), agentId: "main" },
+        { ...legacyJob("clear-explicit-undefined"), agentId: "main" },
       ],
     });
     const state = createCronServiceState({
@@ -207,6 +210,16 @@ describe("cron agent ownership reloads", () => {
       agentId: "research",
       sessionKey: "agent:research:main",
     });
+    for (const [jobId, agentId] of [
+      ["clear-explicit-empty", ""],
+      ["clear-explicit-whitespace", "   "],
+      ["clear-explicit-undefined", undefined],
+    ] as const) {
+      await expect(update(state, jobId, { agentId })).resolves.toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+    }
   });
 });
 

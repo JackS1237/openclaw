@@ -190,6 +190,23 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(fs.existsSync(workerPath)).toBe(false);
   });
 
+  it("scans every agent in an ownerless explicit fleet", async () => {
+    const stateDir = createAgentDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs({
+        cfg,
+        env,
+        prompter: prompter(true),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
+      }),
+    ).resolves.toEqual({ detected: 0, migrated: 0, warnings: [] });
+  });
+
   it("preserves legacy credentials and does not create SQLite when repair is declined", async () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai");

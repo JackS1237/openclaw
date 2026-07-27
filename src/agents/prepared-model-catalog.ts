@@ -5,7 +5,6 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -53,10 +52,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   const explicitOrDefaultAgentId =
     params.agentId ?? (params.agentDir === undefined ? resolveDefaultAgentId(config) : undefined);
   const agentDir =
-    params.agentDir ??
-    (explicitOrDefaultAgentId
-      ? resolveAgentDir(config, explicitOrDefaultAgentId)
-      : resolveDefaultAgentDir(config, params.env));
+    params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
     params.agentDir === undefined
       ? []
@@ -64,12 +60,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
           (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
         );
   const agentId =
-    explicitOrDefaultAgentId ??
-    (params.agentDir === undefined
-      ? resolveDefaultAgentId(config)
-      : matchingAgentIds.length === 1
-        ? matchingAgentIds[0]
-        : undefined);
+    explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
     explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
@@ -78,7 +69,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     agentDir,
     config,
     ...(params.env ? { env: params.env } : {}),
-    inheritedAuthDir: resolveDefaultAgentDir(config, params.env),
+    inheritedAuthDir: agentDir,
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;
