@@ -33,6 +33,7 @@ import {
 import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake.js";
 import {
   peekSystemEventEntries,
+  resolveSystemEventQueueKey,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
 } from "./system-events.js";
@@ -137,8 +138,16 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
+  const eventQueueKeys = new Set([
+    resolveSystemEventQueueKey({ sessionKey: session.sessionKey, agentId: params.agentId }),
+    session.sessionKey,
+  ]);
   const pendingEventEntries =
-    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+    params.runScope === "commitment-only"
+      ? []
+      : [...eventQueueKeys]
+          .flatMap((sessionKey) => peekSystemEventEntries(sessionKey))
+          .sort((left, right) => left.ts - right.ts);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({

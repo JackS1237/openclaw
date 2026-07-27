@@ -404,7 +404,10 @@ export function listSessionsFromStore(params: {
     nextOffset,
     hasMore,
     creators,
-    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
+    defaults: getSessionDefaults(cfg, params.modelCatalog, {
+      ...(typeof opts.agentId === "string" ? { agentId: opts.agentId } : {}),
+      allowPluginNormalization: false,
+    }),
     sessions,
   };
 }
@@ -543,7 +546,10 @@ export async function listSessionsFromStoreAsync(params: {
       nextOffset,
       hasMore,
       creators,
-      defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
+      defaults: getSessionDefaults(cfg, params.modelCatalog, {
+        ...(typeof opts.agentId === "string" ? { agentId: opts.agentId } : {}),
+        allowPluginNormalization: false,
+      }),
       sessions,
     };
   });

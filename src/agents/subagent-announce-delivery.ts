@@ -40,7 +40,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { resolveDefaultAgentId } from "./agent-scope-config.js";
+import { resolveDefaultAgentId, tryResolveSoleAgentId } from "./agent-scope-config.js";
 import {
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
@@ -622,9 +622,10 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
-export function loadSessionEntryByKey(sessionKey: string) {
+export function loadSessionEntryByKey(sessionKey: string, explicitAgentId?: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+  const agentId =
+    explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey, tryResolveSoleAgentId(cfg));
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   return subagentAnnounceDeliveryDeps.loadSessionEntry({
     storePath,

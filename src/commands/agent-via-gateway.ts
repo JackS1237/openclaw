@@ -874,10 +874,17 @@ async function agentViaGatewayCommand(
   const deferUnavailableRemoteContractSession = Boolean(
     opts.remoteGatewayContractUnavailable && !explicitSessionKey,
   );
+  // Session ids are authoritative only on the gateway that owns the store.
+  // Never resolve a remote id against a possibly colliding local session DB.
+  const deferRemoteSessionId = Boolean(
+    remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
+  );
+  const deferServerSessionResolution =
+    deferUnavailableRemoteContractSession || deferRemoteSessionId;
 
   const sessionKey = preserveUnavailableRemoteLegacyKey
     ? explicitSessionKey
-    : deferExplicitRecipientSession || deferUnavailableRemoteContractSession
+    : deferExplicitRecipientSession || deferServerSessionResolution
       ? undefined
       : classifySessionKeyShape(explicitSessionKey) === "agent"
         ? explicitSessionKey
@@ -888,7 +895,7 @@ async function agentViaGatewayCommand(
             sessionId: opts.sessionId,
             sessionKey: explicitSessionKey,
           }).sessionKey;
-  const abortSessionKey = deferUnavailableRemoteContractSession
+  const abortSessionKey = deferServerSessionResolution
     ? undefined
     : deferExplicitRecipientSession
       ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey

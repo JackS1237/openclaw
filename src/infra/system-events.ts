@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
@@ -40,6 +41,18 @@ type SystemEventOptions = {
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
 };
+
+/** Keeps per-agent global-session events isolated while preserving the logical session key. */
+export function resolveSystemEventQueueKey(params: {
+  sessionKey: string;
+  agentId?: string;
+}): string {
+  const sessionKey = requireSessionKey(params.sessionKey);
+  const agentId = normalizeOptionalString(params.agentId);
+  return sessionKey === "global" && agentId
+    ? `agent:${normalizeAgentId(agentId)}:global`
+    : sessionKey;
+}
 
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";

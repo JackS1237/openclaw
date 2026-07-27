@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
@@ -184,7 +184,7 @@ async function persistExpectedSessionTranscriptTurn(
     scope.agentId ??
     resolveAgentIdFromSessionKey(
       sessionKey,
-      resolveDefaultAgentId(options.config ?? getRuntimeConfig()),
+      tryResolveSoleAgentId(options.config ?? getRuntimeConfig()),
     );
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
@@ -275,7 +275,7 @@ async function resolveTranscriptTurnTarget(
   }
   const agentId =
     scope.agentId ??
-    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config ?? getRuntimeConfig()));
+    resolveAgentIdFromSessionKey(sessionKey, tryResolveSoleAgentId(config ?? getRuntimeConfig()));
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }

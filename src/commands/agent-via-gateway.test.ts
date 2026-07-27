@@ -1294,6 +1294,69 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("defers session id resolution after the remote contract loads successfully", async () => {
+    const resolveSessionKeyForRequest = vi.fn(() => {
+      throw new Error("remote session ids must not consult the local store");
+    });
+    loadAgentSessionModuleMock.mockResolvedValue({ resolveSessionKeyForRequest });
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          ownership: "explicit",
+          selectionRequired: true,
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: [{ id: "ops", name: "Operations" }],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand(
+          { message: "hi", agent: "ops", sessionId: "remote-only-session" },
+          runtime,
+        );
+
+        expect(resolveSessionKeyForRequest).not.toHaveBeenCalled();
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.sessionId).toBe("remote-only-session");
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("continues resolving session ids from the local gateway store", async () => {
+    const resolveSessionKeyForRequest = vi.fn(() => ({
+      sessionKey: "agent:main:resolved-local-session",
+    }));
+    loadAgentSessionModuleMock.mockResolvedValue({ resolveSessionKeyForRequest });
+
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionId: "local-session-id" }, runtime);
+
+      expect(resolveSessionKeyForRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "local-session-id" }),
+      );
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway params");
+      expect(params.sessionKey).toBe("agent:main:resolved-local-session");
+    });
+  });
+
   it("keeps an agent-scoped target usable when the remote roster is unavailable", async () => {
     callGateway
       .mockRejectedValueOnce(new Error("remote roster unavailable"))

@@ -874,6 +874,30 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
 
+  test("session defaults resolve the requested agent model and context", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          contextTokens: 128_000,
+        },
+        entries: {
+          main: {},
+          work: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            contextTokens: 256_000,
+          },
+        },
+      },
+    };
+
+    expect(getSessionDefaults(cfg, undefined, { agentId: "work" })).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 256_000,
+    });
+  });
+
   test("session defaults and rows consume provider-policy thinking without catalog", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
       resolveThinkingProfile: () => ({
@@ -1652,14 +1676,16 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
+  test("resolveSessionStoreKey rejects an ambiguous roster without an explicit owner", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops" }, { id: "review" }] },
     } as OpenClawConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
-      "agent:ops:discord:group:123",
+    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "main" })).toThrow(
+      "Multiple agents are configured",
+    );
+    expect(() => resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toThrow(
+      "Multiple agents are configured",
     );
   });
 

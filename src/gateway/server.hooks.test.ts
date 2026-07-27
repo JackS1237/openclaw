@@ -9,6 +9,7 @@ import {
   drainSystemEvents,
   peekSystemEventEntries,
   peekSystemEvents,
+  resolveSystemEventQueueKey,
 } from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
@@ -22,8 +23,14 @@ installGatewayTestHooks({ scope: "suite" });
 
 await import("./server.js");
 
-const resolveMainKey = () =>
-  resolveAgentMainSessionKey({ cfg: getRuntimeConfig(), agentId: "main" });
+const resolveMainKey = () => {
+  const cfg = getRuntimeConfig();
+  const sessionKey =
+    cfg.session?.scope === "global"
+      ? "global"
+      : resolveAgentMainSessionKey({ cfg, agentId: "main" });
+  return resolveSystemEventQueueKey({ sessionKey, agentId: "main" });
+};
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
@@ -989,7 +996,7 @@ describe("gateway server hooks", () => {
       const noAgentCall = cronRunCall();
       expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
-      expect(peekSystemEventEntries("agent:main:main").map((event) => event.text)).toContain(
+      expect(peekSystemEventEntries("agent:main:global").map((event) => event.text)).toContain(
         "Hook Hook: done",
       );
       drainSystemEvents(resolveMainKey());

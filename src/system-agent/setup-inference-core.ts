@@ -232,6 +232,7 @@ export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
+  applySystemAgentModelSelection?: typeof import("./setup-apply.js").applySystemAgentModelSelection;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;

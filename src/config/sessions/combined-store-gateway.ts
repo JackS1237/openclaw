@@ -2,7 +2,7 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
   resolveStoredSessionKeyForAgentStore,
@@ -176,11 +176,13 @@ export function loadCombinedSessionStoreForGateway(
   // Exclusion happens before path aggregation; filtering rows afterward would
   // still leak a live incognito handle by changing the projected store path.
   const includeIncognito = opts.includeIncognito !== false;
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const requestedAgentId =
     typeof opts.agentId === "string" && opts.agentId.trim()
       ? normalizeAgentId(opts.agentId)
       : undefined;
+  const defaultAgentId = normalizeAgentId(
+    requestedAgentId ?? tryResolveSoleAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
+  );
   const configuredAgentIds =
     opts.configuredAgentsOnly === true && !requestedAgentId
       ? new Set(listConfiguredSessionStoreAgentIds(cfg))

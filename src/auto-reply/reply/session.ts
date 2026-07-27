@@ -1219,6 +1219,7 @@ async function initSessionStateAttemptLocked(
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
           cfg,
+          agentId,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
@@ -1249,6 +1250,7 @@ async function initSessionStateAttemptLocked(
         sessionId: effectiveSessionId,
         sessionKey,
         cfg,
+        agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {

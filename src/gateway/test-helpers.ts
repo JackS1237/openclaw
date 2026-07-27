@@ -30,7 +30,6 @@ export {
   startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
-  waitForSystemEvent,
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.server.js";

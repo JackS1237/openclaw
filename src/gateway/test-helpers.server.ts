@@ -9,8 +9,9 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
@@ -36,7 +37,7 @@ import {
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import { drainSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
@@ -110,19 +111,16 @@ let activeSuiteHookScopeCount = 0;
 const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
-  const resolved = resolveMainSessionKeyFromConfig();
-  const keys = new Set<string>();
-  if (resolved) {
-    keys.add(resolved);
-  }
-  if (resolved !== "global") {
-    const parsed = parseAgentSessionKey(resolved);
-    const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
-    keys.add(`agent:${agentId}:main`);
-    const configuredMainKey = normalizeMainKey(
-      (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
-    );
-    keys.add(`agent:${agentId}:${configuredMainKey}`);
+  const configuredAgentIds = listAgentIds({ agents: testState.agentsConfig });
+  const agentIds = configuredAgentIds.length > 0 ? configuredAgentIds : [DEFAULT_AGENT_ID];
+  const configuredMainKey = normalizeMainKey(
+    (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
+  );
+  const keys = new Set<string>(["global"]);
+  for (const agentId of agentIds) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    keys.add(`agent:${normalizedAgentId}:main`);
+    keys.add(`agent:${normalizedAgentId}:${configuredMainKey}`);
   }
   return [...keys];
 }
@@ -1303,20 +1301,4 @@ export async function rpcReq<T extends Record<string, unknown>>(
   return await responsePromise;
 }
 
-export async function waitForSystemEvent(timeoutMs = 2000) {
-  const sessionKeys = resolveGatewayTestMainSessionKeys();
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    for (const sessionKey of sessionKeys) {
-      const events = peekSystemEvents(sessionKey);
-      if (events.length > 0) {
-        return events;
-      }
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error("timeout waiting for system event");
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

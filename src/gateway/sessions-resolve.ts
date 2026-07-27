@@ -8,20 +8,20 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { canonicalizeSessionEntryAliases, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
-  listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 export type SessionsResolveResult =
-  | { ok: true; key: string }
+  | { ok: true; key: string; agentId?: string }
   | { ok: true; missing: true }
   | { ok: false; error: ErrorShape };
 
@@ -220,7 +220,33 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
-    return { ok: true, key: selection.sessionKey };
+    if (selection.sessionKey !== "global") {
+      return { ok: true, key: selection.sessionKey };
+    }
+    const requestedOwner = normalizeOptionalString(p.agentId);
+    const globalOwners = (requestedOwner ? [requestedOwner] : listAgentIds(cfg)).filter(
+      (agentId) => {
+        const ownerStore = loadCombinedSessionStoreForGateway(cfg, { agentId }).store;
+        return ownerStore.global?.sessionId === sessionId;
+      },
+    );
+    if (globalOwners.length > 1) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Multiple sessions found for sessionId: ${sessionId} (${globalOwners
+            .map((agentId) => `agent:${agentId}:global`)
+            .join(", ")})`,
+        ),
+      };
+    }
+    const ownerAgentId = globalOwners[0];
+    return {
+      ok: true,
+      key: selection.sessionKey,
+      ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+    };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -231,28 +257,27 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-  const list = listSessionsFromStore({
+  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+  const labelMatches = filterAndSortSessionEntries({
     cfg,
-    storePath,
     store,
+    now: Date.now(),
     opts: {
       includeGlobal: p.includeGlobal === true,
       includeUnknown: p.includeUnknown === true,
       label: parsedLabel.label,
       agentId: p.agentId,
       spawnedBy: p.spawnedBy,
-      limit: 2,
     },
-  });
-  if (list.sessions.length === 0) {
+  }).slice(0, 2);
+  if (labelMatches.length === 0) {
     return noSessionFoundResult({
       p,
       message: `No session found with label: ${parsedLabel.label}`,
     });
   }
-  if (list.sessions.length > 1) {
-    const keys = list.sessions.map((s) => s.key).join(", ");
+  if (labelMatches.length > 1) {
+    const keys = labelMatches.map(([key]) => key).join(", ");
     return {
       ok: false,
       error: errorShape(
@@ -262,13 +287,44 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
+  const labelKey = expectDefined(labelMatches[0], "sessions entry at 0")[0];
   const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
+  if (labelKey !== "global") {
+    return { ok: true, key: labelKey };
+  }
+  const requestedOwner = normalizeOptionalString(p.agentId);
+  const globalOwners = (requestedOwner ? [requestedOwner] : listAgentIds(cfg)).filter((agentId) => {
+    const ownerStore = loadCombinedSessionStoreForGateway(cfg, { agentId }).store;
+    return filterAndSortSessionEntries({
+      cfg,
+      store: ownerStore,
+      now: Date.now(),
+      opts: {
+        includeGlobal: true,
+        label: parsedLabel.label,
+        agentId,
+        spawnedBy: p.spawnedBy,
+      },
+    }).some(([key]) => key === "global");
+  });
+  if (globalOwners.length > 1) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Multiple sessions found with label: ${parsedLabel.label} (${globalOwners
+          .map((agentId) => `agent:${agentId}:global`)
+          .join(", ")})`,
+      ),
+    };
+  }
+  const ownerAgentId = globalOwners[0];
   return {
     ok: true,
-    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+    key: labelKey,
+    ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
   };
 }

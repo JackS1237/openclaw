@@ -15,7 +15,7 @@ import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentTargetAgentId,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
@@ -169,7 +169,9 @@ async function activateSetupInferenceUnredacted(
     let testPlan = plan;
     if (plan.persistModelRef) {
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
-      const stagedConfig = await applySystemAgentModelSelection({
+      const applyModelSelection =
+        deps.applySystemAgentModelSelection ?? applySystemAgentModelSelection;
+      const stagedConfig = await applyModelSelection({
         config: plan.config,
         model: plan.persistModelRef,
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
@@ -178,7 +180,7 @@ async function activateSetupInferenceUnredacted(
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig),
+        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig, plan.routeAgentId),
       };
     }
 
@@ -302,10 +304,13 @@ async function activateSetupInferenceUnredacted(
         };
       }
     }
-    const baselineRoute = await projectDefaultInferenceRoute(cfg);
-    const verifiedRoute = await projectDefaultInferenceRoute(testPlan.config);
+    const baselineRoute = await projectInferenceRoute(cfg, testPlan.routeAgentId);
+    const verifiedRoute = await projectInferenceRoute(testPlan.config, testPlan.routeAgentId);
     const stagedRoute = verifiedRoute.route;
-    const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(testPlan.config);
+    const stagedExecutionRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+      testPlan.config,
+      testPlan.routeAgentId,
+    );
     if (
       !stagedRoute ||
       !stagedExecutionRoute ||
@@ -487,7 +492,7 @@ async function activateSetupInferenceUnredacted(
           ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
           : undefined;
       const latestRoute = latestRuntime
-        ? await projectDefaultInferenceRoute(latestRuntime)
+        ? await projectInferenceRoute(latestRuntime, testPlan.routeAgentId)
         : undefined;
       if (!latestRoute || !sameDefaultInferenceRoute(latestRoute, verifiedRoute)) {
         return {
@@ -498,7 +503,7 @@ async function activateSetupInferenceUnredacted(
         };
       }
       const latestResolvedRoute = latestRuntime
-        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime)
+        ? await resolveSystemAgentConfiguredRouteFromConfig(latestRuntime, testPlan.routeAgentId)
         : null;
       if (!latestResolvedRoute) {
         return {

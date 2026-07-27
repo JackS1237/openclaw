@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
@@ -36,17 +37,27 @@ export function emitSessionsChanged(
           : undefined,
       )
     : null;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
-  const activeRunState = sessionRow
-    ? resolveVisibleActiveSessionRunState({
-        context,
-        requestedKey: payload.sessionKey ?? sessionRow.key,
-        canonicalKey: sessionRow.key,
-        sessionId: sessionRow.sessionId,
-        agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-        defaultAgentId,
-      })
-    : null;
+  const cfg = context.getRuntimeConfig();
+  let defaultAgentId: string | undefined;
+  if (sessionRow) {
+    try {
+      defaultAgentId =
+        payload.agentId ?? resolveAgentIdFromSessionKey(sessionRow.key, tryResolveSoleAgentId(cfg));
+    } catch {
+      defaultAgentId = undefined;
+    }
+  }
+  const activeRunState =
+    sessionRow && defaultAgentId
+      ? resolveVisibleActiveSessionRunState({
+          context,
+          requestedKey: payload.sessionKey ?? sessionRow.key,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          agentId: sessionRow.key === "global" ? payload.agentId : undefined,
+          defaultAgentId,
+        })
+      : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {

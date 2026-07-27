@@ -58,7 +58,7 @@ function expectSessionsSendDetails(
     reply?: string;
     sessionKey?: string;
   };
-  expect(details.status).toBe("ok");
+  expect(details.status, JSON.stringify(details)).toBe("ok");
   expect(details.reply).toBe(expected.reply);
   expect(details.sessionKey).toBe(expected.sessionKey);
 }
@@ -618,6 +618,24 @@ describe("sessions_send agent targeting", () => {
           storePath: testState.sessionStorePath,
         });
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
+
+        const globalRequesterTool = createOpenClawTools({
+          agentSessionKey: "global",
+          requesterAgentIdOverride: "main",
+          config: { ...config, session: { scope: "global" } },
+        }).find((candidate) => candidate.name === "sessions_send");
+        if (!globalRequesterTool) {
+          throw new Error("missing global sessions_send tool");
+        }
+        const globalResult = await globalRequesterTool.execute("call-global-agent-id", {
+          agentId: "orion",
+          message: "hello orion from global",
+          timeoutSeconds: 5,
+        });
+        expectSessionsSendDetails(globalResult, {
+          reply: "orion response",
+          sessionKey: "agent:orion:main",
+        });
       } finally {
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;

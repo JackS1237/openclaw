@@ -1234,6 +1234,48 @@ describe("activateSetupInference", () => {
     expect(runtimeLog).not.toHaveBeenCalled();
   });
 
+  it("keeps the validated route owner when staged config has no ambient fleet target", async () => {
+    const initialConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: {
+          ops: { model: "claude-cli/claude-opus-5" },
+          research: {},
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          issues: [],
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        })) as never,
+        applySystemAgentModelSelection: async (params) => {
+          const staged = await applySystemAgentModelSelection(params);
+          const defaults = { ...staged.agents?.defaults };
+          delete defaults.systemAgent;
+          return { ...staged, agents: { ...staged.agents, defaults } };
+        },
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
+  });
+
   it("disposes the temporary auth database before Windows-style removal", async () => {
     const tempDir = await makeTempDir();
     const databasePath = path.join(tempDir, "agent", "openclaw-agent.sqlite");

@@ -505,6 +505,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({
         workspace: "/tmp/requested-workspace",
         targetAgentId: "ops",
+        expectedAgentId: "ops",
         configPatch: {
           agents: { defaults: { workspace: "/tmp/patch-workspace" }, entries: null },
         },
@@ -518,6 +519,17 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       runtime,
       expect.objectContaining({ agentId: "ops" }),
     );
+  });
+
+  it("accepts the validated implicit agent without requiring a stored roster entry", async () => {
+    const config = {} satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ expectedAgentId: "main" })),
+    ).resolves.toMatchObject({ configPath: "/tmp/openclaw.json" });
   });
 
   it("rejects an ownerless workspace-only setup before persisting the candidate", async () => {

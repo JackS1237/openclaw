@@ -14,7 +14,7 @@ import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEvent, resolveSystemEventQueueKey } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
@@ -28,7 +28,20 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-requ
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId: string }): string {
+  if (params.cfg.session?.scope === "global") {
+    return "global";
+  }
   return resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+}
+
+function enqueueHookSystemEvent(params: {
+  agentId: string;
+  sessionKey: string;
+  text: string;
+}): void {
+  enqueueSystemEvent(params.text, {
+    sessionKey: resolveSystemEventQueueKey(params),
+  });
 }
 
 function shouldAnnounceHookRunResult(params: {
@@ -130,12 +143,16 @@ export function createGatewayHooksRequestHandler(params: {
     agentId: string,
   ) => {
     const cfg = getRuntimeConfig();
-    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-    enqueueSystemEvent(value.text, {
-      sessionKey,
-    });
+    const sessionKey = resolveHookEventSessionKey({ cfg, agentId });
+    enqueueHookSystemEvent({ text: value.text, sessionKey, agentId });
     if (value.mode === "now") {
-      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake", agentId });
+      requestHeartbeat({
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+        agentId,
+        sessionKey,
+      });
     }
   };
 
@@ -180,16 +197,24 @@ export function createGatewayHooksRequestHandler(params: {
     let hookEventSessionKey: string | undefined;
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
-      enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-        sessionKey:
-          hookEventSessionKey ??
-          resolveAgentMainSessionKey({ cfg: getRuntimeConfig(), agentId: value.effectiveAgentId }),
+      const eventSessionKey =
+        hookEventSessionKey ??
+        resolveHookEventSessionKey({
+          cfg: getRuntimeConfig(),
+          agentId: value.effectiveAgentId,
+        });
+      enqueueHookSystemEvent({
+        text: `Hook ${safeName} (error): ${String(err)}`,
+        sessionKey: eventSessionKey,
+        agentId: value.effectiveAgentId,
       });
       if (value.wakeMode === "now") {
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          agentId: value.effectiveAgentId,
+          sessionKey: eventSessionKey,
         });
       }
     };
@@ -257,9 +282,11 @@ export function createGatewayHooksRequestHandler(params: {
           }
           if (shouldAnnounce) {
             const eventSessionKey =
-              hookEventSessionKey ?? resolveAgentMainSessionKey({ cfg, agentId });
-            enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+              hookEventSessionKey ?? resolveHookEventSessionKey({ cfg, agentId });
+            enqueueHookSystemEvent({
+              text: `${prefix}: ${summary}`.trim(),
               sessionKey: eventSessionKey,
+              agentId,
             });
             if (value.wakeMode === "now") {
               requestHeartbeat({

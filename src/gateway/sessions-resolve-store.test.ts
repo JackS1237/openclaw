@@ -120,6 +120,43 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
+  it("returns the owning agent for a selected global session id", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {}, work: {} } },
+        session: { scope: "global" },
+      };
+      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "work" }), {
+        global: {
+          sessionId: "sess-work-global",
+          label: "work-global",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-work-global", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "work" });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "work-global", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "work" });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-work-global", agentId: "work", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "work" });
+    });
+  });
+
   it("preserves cross-agent ambiguity when agentId is absent", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-cross-agent-", async () => {
       const cfg: OpenClawConfig = {
