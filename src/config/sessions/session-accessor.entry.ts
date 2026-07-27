@@ -228,8 +228,12 @@ function resolveSessionEntryStoreTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
-  const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
-  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: scope.cfg,
+    sessionKey: requestedKey,
+    storeAgentId: scope.agentId,
+  });
+  const agentId = scope.agentId ?? resolveSessionStoreAgentId(scope.cfg, canonicalKey);
   const scanTargets = buildLogicalSessionEntryCandidateKeys({
     agentId,
     canonicalKey,

@@ -616,6 +616,7 @@ export async function createGatewaySession(params: {
     // on that fence would deadlock callers that must reject its visible pending row.
     const pendingEntry = resolveSessionEntryAccessTarget({
       cfg: params.cfg,
+      agentId,
       sessionKey: creationTarget.canonicalKey,
     }).entry;
     if (pendingEntry?.initializationPending === true) {
