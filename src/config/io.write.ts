@@ -190,7 +190,18 @@ export async function writeConfigFileFromContext(
     previousSoleAgentId !== undefined && nextAgentIds.has(normalizeAgentId(previousSoleAgentId));
   const previousSoleHandoffAgentId =
     entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined;
-  const persistOwnership = entersMultiAgent || retainedLegacyDefaultAgentId !== undefined;
+  const writesOwnershipTopology = [...(options.explicitSetPaths ?? []), ...unsetPaths].some(
+    (writePath) =>
+      writePath[0] === "agents" &&
+      (writePath.length === 1 ||
+        writePath[1] === "entries" ||
+        writePath[1] === "list" ||
+        writePath[1] === "ownership"),
+  );
+  // A non-roster write must preserve the authored legacy roster. Retire its
+  // default only when this write explicitly owns the topology migration.
+  const persistOwnership =
+    entersMultiAgent || (retainedLegacyDefaultAgentId !== undefined && writesOwnershipTopology);
   const retainExplicitOwnership =
     nextAgentEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
   const shouldStampOwnershipGeneration =
