@@ -288,6 +288,16 @@ export async function applySystemAgentSetup(
     surface,
     runtime,
   } = params;
+  const normalizedTargetAgentId = targetAgentId ? normalizeAgentId(targetAgentId) : undefined;
+  const normalizedExpectedAgentId = expectedAgentId ? normalizeAgentId(expectedAgentId) : undefined;
+  if (
+    normalizedTargetAgentId &&
+    normalizedExpectedAgentId &&
+    normalizedTargetAgentId !== normalizedExpectedAgentId
+  ) {
+    throw new Error("The setup target agent does not match the verified inference owner.");
+  }
+  const setupAgentId = normalizedTargetAgentId ?? normalizedExpectedAgentId;
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
   const commit: SystemAgentSetupApplyHooks["commit"] = hooks
     ? async (effect) => await hooks.commit(effect)
@@ -312,7 +322,7 @@ export async function applySystemAgentSetup(
   }
 
   const guardModules =
-    expectedAgentId || expectedAgentDir || expectedModelRef
+    setupAgentId || expectedAgentDir || expectedModelRef
       ? await Promise.all([
           import("../agents/agent-scope.js"),
           import("../agents/model-selection.js"),
@@ -323,14 +333,14 @@ export async function applySystemAgentSetup(
       return;
     }
     const [{ resolveAgentDir }, { resolveDefaultModelForAgent }] = guardModules;
-    const currentAgentId = resolveSystemAgentTargetAgentId(
-      config,
-      expectedAgentId ?? targetAgentId,
-    );
+    const currentAgentId = resolveSystemAgentTargetAgentId(config, setupAgentId);
     const currentTargetExists =
       !hasAgentRosterProperty(config) ||
       listAgentEntries(config).some((entry) => normalizeAgentId(entry.id) === currentAgentId);
-    if (expectedAgentId && (!currentTargetExists || currentAgentId !== expectedAgentId)) {
+    if (
+      normalizedExpectedAgentId &&
+      (!currentTargetExists || currentAgentId !== normalizedExpectedAgentId)
+    ) {
       throw new Error(
         "The default agent changed while AI access was being tested. Try setup again.",
       );
@@ -378,7 +388,7 @@ export async function applySystemAgentSetup(
       isDeepStrictEqual(verifiedSource, setupSource)
         ? await projectInferenceRoute(
             verifiedSnapshot.runtimeConfig ?? verifiedSnapshot.config,
-            expectedAgentId ?? targetAgentId,
+            setupAgentId,
           )
         : null;
     if (!currentRoute || !sameDefaultInferenceRoute(currentRoute, expectedRoute)) {
@@ -452,7 +462,7 @@ export async function applySystemAgentSetup(
       candidate = await applySystemAgentModelSelection({
         config: candidate,
         model,
-        ...(targetAgentId ? { targetAgentId } : {}),
+        ...(setupAgentId ? { targetAgentId: setupAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(authProfileId ? { authProfileId } : {}),
       });
@@ -501,7 +511,7 @@ export async function applySystemAgentSetup(
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
             : setupCandidate.nextConfig;
           const expectedSourceRoute = params.expectedInferenceRoute
-            ? await projectInferenceRoute(finalizedConfig, expectedAgentId ?? targetAgentId)
+            ? await projectInferenceRoute(finalizedConfig, setupAgentId)
             : undefined;
           if (
             params.expectedInferenceRoute &&
@@ -513,7 +523,7 @@ export async function applySystemAgentSetup(
               "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
             );
           }
-          const onboardingTarget = resolveOnboardingAgentTarget(finalizedConfig, targetAgentId);
+          const onboardingTarget = resolveOnboardingAgentTarget(finalizedConfig, setupAgentId);
           // This is the auth/config operation's linearization point. Never hold
           // the synchronous cross-store guard across async config I/O.
           assertCommitPreconditions?.();
@@ -552,7 +562,7 @@ export async function applySystemAgentSetup(
     }
     const expectedPersistedRoute = await projectInferenceRoute(
       expectedRuntime.config,
-      expectedAgentId ?? targetAgentId,
+      setupAgentId,
     );
     await assertVerifiedRoute(afterSnapshot, expectedPersistedRoute, "after");
     // Plugin defaults are part of the access-tested runtime route. Reject a

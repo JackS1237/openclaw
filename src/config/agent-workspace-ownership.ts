@@ -40,14 +40,21 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
     Object.hasOwn(entry, "workspace") &&
     entry.workspace !== undefined &&
     typeof entry.workspace !== "string";
-  if (!entry || workspaceIsResolved || workspaceIsMalformed) {
+  if (!entry || workspaceIsMalformed) {
     return { config: params.targetConfig, insertedPaths: [] };
   }
 
   // Resolve against the old sole-agent topology. Resolving after the roster
   // expands would silently select the new per-agent workspace instead.
   const workspace = resolveAgentWorkspaceDir(params.sourceConfig, agentId, params.env);
-  entries[entryKey!] = { ...entry, workspace };
+  if (workspaceIsResolved) {
+    const targetWorkspace = resolveAgentWorkspaceDir(params.targetConfig, agentId, params.env);
+    if (targetWorkspace !== workspace) {
+      return { config: params.targetConfig, insertedPaths: [] };
+    }
+  } else {
+    entries[entryKey!] = { ...entry, workspace };
+  }
   const pluginPath = path.join(workspace, ".openclaw", "extensions");
   const rawPlugins = params.targetConfig.plugins as unknown;
   const rawPluginLoad = isRecord(rawPlugins) ? rawPlugins.load : undefined;
@@ -82,7 +89,7 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
     workspace,
     ...(preservePluginPath && !pluginPaths.includes(pluginPath) ? { pluginPath } : {}),
     insertedPaths: [
-      ["agents", "entries", entryKey!, "workspace"],
+      ...(workspaceIsResolved ? [] : [["agents", "entries", entryKey!, "workspace"]]),
       ...(preservePluginPath && !pluginPaths.includes(pluginPath)
         ? [["plugins", "load", "paths"]]
         : []),

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
@@ -48,6 +49,17 @@ export type SetupInferenceTestPlan = {
     pluginId?: string;
   };
 };
+
+/** Carries an explicit route only when the authored roster is canonical and ambiguous. */
+export function resolveSetupModelSelectionTargetAgentId(
+  config: OpenClawConfig,
+  routeAgentId?: string,
+): string | undefined {
+  const roster = readAgentRosterProperty(config);
+  return routeAgentId && roster?.kind === "entries" && listAgentEntries(config).length > 1
+    ? normalizeAgentId(routeAgentId)
+    : undefined;
+}
 
 export function configureCodexCliPreparedAuth(cfg: OpenClawConfig): OpenClawConfig {
   const entry = cfg.plugins?.entries?.codex;
@@ -214,7 +226,11 @@ export function parseRef(modelRef: string): { provider: string; model: string } 
     : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
 }
 
-export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: string): unknown {
+export function projectSetupTargetModelMetadata(
+  config: OpenClawConfig,
+  modelRef: string,
+  routeAgentId?: string,
+): unknown {
   const target = parseRef(modelRef);
   const canonicalKey = modelKey(target.provider, target.model);
   const keys = new Set(
@@ -233,7 +249,7 @@ export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef
           : { exists: false },
       ]),
     );
-  const defaultAgentId = resolveSystemAgentTargetAgentId(config);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(config, routeAgentId);
   const agent = listAgentEntries(config).find(
     (entry) => normalizeAgentId(entry.id) === defaultAgentId,
   );
@@ -291,6 +307,7 @@ export function prepareManualAuthForActivation(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  routeAgentId?: string;
 }): {
   config: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
@@ -321,6 +338,7 @@ function copySelectedModelMetadata(params: {
   target: OpenClawConfig;
   prepared: OpenClawConfig;
   modelRef: string;
+  routeAgentId?: string;
 }): void {
   const preparedDefaultModels = params.prepared.agents?.defaults?.models;
   if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
@@ -341,7 +359,7 @@ function copySelectedModelMetadata(params: {
     };
   }
 
-  const defaultAgentId = resolveSystemAgentTargetAgentId(params.target);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(params.target, params.routeAgentId);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );
@@ -395,6 +413,7 @@ export function projectManualInferenceConfig(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  routeAgentId?: string;
 }): OpenClawConfig {
   const config = structuredClone(params.baseConfig);
   if (params.selectedProfile && params.selectedProfileId) {
@@ -442,6 +461,7 @@ export function projectManualInferenceConfig(params: {
     target: config,
     prepared: params.preparedConfig,
     modelRef: params.modelRef,
+    routeAgentId: params.routeAgentId,
   });
   return config;
 }

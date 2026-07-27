@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pinSoleAgentWorkspaceForFleetExpansion } from "./agent-workspace-ownership.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
@@ -30,6 +31,31 @@ describe("agent workspace plugin ownership", () => {
       research: {},
     });
     expect(pinned.insertedPaths).toContainEqual(["agents", "entries", "ops", "workspace"]);
+  });
+
+  it("preserves an existing sole workspace plugin path during fleet expansion", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const sourceConfig: OpenClawConfig = {
+      agents: { entries: { ops: { workspace: "/srv/ops" } } },
+    };
+    const targetConfig: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: { workspace: "/srv/ops" }, research: {} },
+      },
+    };
+
+    const pinned = pinSoleAgentWorkspaceForFleetExpansion({
+      sourceConfig,
+      targetConfig,
+      agentId: "ops",
+    });
+
+    expect(pinned.config.plugins?.load?.paths).toContain(
+      path.join("/srv/ops", ".openclaw", "extensions"),
+    );
+    expect(pinned.insertedPaths).not.toContainEqual(["agents", "entries", "ops", "workspace"]);
+    expect(pinned.insertedPaths).toContainEqual(["plugins", "load", "paths"]);
   });
 
   it.each([

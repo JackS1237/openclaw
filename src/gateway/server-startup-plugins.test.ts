@@ -474,6 +474,13 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
       channels: {
         telegram: {
           botToken: "token",

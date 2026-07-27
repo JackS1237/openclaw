@@ -180,6 +180,7 @@ export async function buildTestPlan(params: {
             modelRef,
             providerId: ref.provider,
             pluginId: choice.pluginId,
+            routeAgentId: params.routeAgentId,
           })
         : {
             config: projectManualInferenceConfig({
@@ -188,6 +189,7 @@ export async function buildTestPlan(params: {
               modelRef,
               providerId: ref.provider,
               pluginId: choice.pluginId,
+              routeAgentId: params.routeAgentId,
             }),
             profiles: [] as ProviderAuthResult["profiles"],
             selectedProfileId: undefined,
@@ -311,6 +313,7 @@ export async function buildTestPlan(params: {
           selectedProfileId: "openai:codex-cli-api-key",
           modelRef,
           providerId: ref.provider,
+          routeAgentId: params.routeAgentId,
         });
         return {
           runner: "embedded",
@@ -540,6 +543,7 @@ export async function buildTestPlan(params: {
         selectedProfileId: matchingProfile.profileId,
         modelRef,
         providerId: ref.provider,
+        routeAgentId: params.routeAgentId,
         ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
       });
       return {

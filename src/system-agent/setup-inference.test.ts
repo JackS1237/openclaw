@@ -37,6 +37,10 @@ import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 import { runSetupInferenceTest } from "./setup-inference-persist.js";
+import {
+  projectManualInferenceConfig,
+  projectSetupTargetModelMetadata,
+} from "./setup-inference-plan-helpers.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
@@ -460,6 +464,50 @@ describe("applySystemAgentModelSelection", () => {
     expect(config.agents.entries.ops?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe(
       "openclaw",
     );
+  });
+
+  it("projects and copies model metadata for the explicit setup route", () => {
+    const modelRef = "openai/gpt-5.5";
+    const baseConfig = {
+      agents: {
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const preparedConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        entries: {
+          ...baseConfig.agents.entries,
+          research: {
+            models: { [modelRef]: { agentRuntime: { id: "codex" } } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(projectSetupTargetModelMetadata(preparedConfig, modelRef, "research")).toMatchObject({
+      defaultAgentId: "research",
+      agent: {
+        [modelRef]: {
+          exists: true,
+          value: { agentRuntime: { id: "codex" } },
+        },
+      },
+    });
+
+    const projected = projectManualInferenceConfig({
+      baseConfig,
+      preparedConfig,
+      modelRef,
+      providerId: "openai",
+      routeAgentId: "research",
+    });
+    expect(projected.agents?.entries?.research?.models?.[modelRef]).toEqual({
+      agentRuntime: { id: "codex" },
+    });
+    expect(projected.agents?.entries?.ops?.models?.[modelRef]).toBeUndefined();
   });
 });
 
@@ -1237,7 +1285,6 @@ describe("activateSetupInference", () => {
   it("keeps the validated route owner when staged config has no ambient fleet target", async () => {
     const initialConfig = {
       agents: {
-        ownership: "explicit" as const,
         defaults: { systemAgent: { agentId: "ops" } },
         entries: {
           ops: { model: "claude-cli/claude-opus-5" },

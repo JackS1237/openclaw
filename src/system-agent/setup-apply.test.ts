@@ -521,6 +521,25 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
   });
 
+  it("rejects differing mutation and verified setup owners", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await expect(
+      applySystemAgentSetup(baseParams({ targetAgentId: "research", expectedAgentId: "ops" })),
+    ).rejects.toThrow("setup target agent does not match the verified inference owner");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
   it("accepts the validated implicit agent without requiring a stored roster entry", async () => {
     const config = {} satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("probe", config);

@@ -149,7 +149,10 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const pluginWorkspaceDir = resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
+  const pluginWorkspaceDir =
+    params.minimalTestGateway || pluginsGloballyDisabled
+      ? undefined
+      : resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
   const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled

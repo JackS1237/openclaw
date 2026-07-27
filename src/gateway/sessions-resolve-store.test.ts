@@ -157,6 +157,36 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
+  it("returns a persisted non-roster owner for global session ids and labels", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-retired-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        session: { scope: "global" },
+      };
+      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "retired" }), {
+        global: {
+          sessionId: "sess-retired-global",
+          label: "retired-global",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-retired-global", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "retired" });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "retired-global", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "retired" });
+    });
+  });
+
   it("preserves cross-agent ambiguity when agentId is absent", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-cross-agent-", async () => {
       const cfg: OpenClawConfig = {
