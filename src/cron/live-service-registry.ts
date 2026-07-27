@@ -6,7 +6,9 @@ type LiveCronOwnerMigration = {
     migration: LegacyDefaultCronOwnerMigrationResult;
     release: () => void;
   }>;
-  refreshLegacyDefaultAgentOwnerHandoff: () => Promise<void>;
+  refreshLegacyDefaultAgentOwnerHandoff: (options?: {
+    persistSchedulingState?: boolean;
+  }) => Promise<void>;
 };
 
 type ActiveHandoff = {
@@ -91,13 +93,19 @@ export function beginLegacyDefaultOwnerHandoff(params: {
       const result = await leader.beginLegacyDefaultAgentOwnerHandoff(params.legacyDefaultAgentId);
       handoff.releaseStoreLock = result.release;
       await Promise.all(
-        followers.map((service) => service.refreshLegacyDefaultAgentOwnerHandoff()),
+        followers.map((service) =>
+          service.refreshLegacyDefaultAgentOwnerHandoff({ persistSchedulingState: false }),
+        ),
       );
       return result.migration;
     },
     refreshSealedServices: async () => {
+      const [leader, ...followers] = participants;
+      await leader?.refreshLegacyDefaultAgentOwnerHandoff({ persistSchedulingState: true });
       await Promise.all(
-        participants.map((service) => service.refreshLegacyDefaultAgentOwnerHandoff()),
+        followers.map((service) =>
+          service.refreshLegacyDefaultAgentOwnerHandoff({ persistSchedulingState: false }),
+        ),
       );
     },
     release: () => {

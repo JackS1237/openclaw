@@ -169,6 +169,30 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("rejects a stale binding agent when a configured roster exists", () => {
+    let thrown: unknown;
+    try {
+      resolveRoute({
+        cfg: {
+          agents: { entries: { ops: {}, research: {} } },
+          bindings: [{ agentId: "stale-agent", match: { channel: "telegram" } }],
+        },
+        channel: "telegram",
+        accountId: null,
+        peer: { kind: "direct", id: "user-1" },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+      agentIds: ["ops", "research"],
+      surface: "route binding",
+    });
+  });
+
   test("route binding session dmScope isolates selected direct peers without changing agent", () => {
     const cfg: OpenClawConfig = {
       session: { dmScope: "main" },
@@ -1096,8 +1120,12 @@ describe("wildcard peer bindings (peer.id=*)", () => {
 
   test("peer.id=* does not match group peers when kind is direct", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "dm-only" }] },
+      agents: { ownership: "explicit", entries: { main: {}, "dm-only": {} } },
       bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram", accountId: "bot1" },
+        },
         {
           agentId: "dm-only",
           match: {
@@ -1115,7 +1143,7 @@ describe("wildcard peer bindings (peer.id=*)", () => {
       peer: { kind: "group", id: "group-999" },
     });
     expect(route.agentId).toBe("main");
-    expect(route.matchedBy).toBe("default");
+    expect(route.matchedBy).toBe("binding.account");
   });
 
   test("exact peer binding wins over wildcard peer binding", () => {
@@ -1302,8 +1330,12 @@ describe("resolved route cache keys", () => {
 
   test("does not reuse a cached route when guildId is omitted versus the literal hyphen string", () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "hyphen-guild" }] },
+      agents: { ownership: "explicit", entries: { main: {}, "hyphen-guild": {} } },
       bindings: [
+        {
+          agentId: "main",
+          match: { channel: "discord", accountId: "default" },
+        },
         {
           agentId: "hyphen-guild",
           match: {
@@ -1322,7 +1354,7 @@ describe("resolved route cache keys", () => {
         accountId: "default",
         peer: { kind: "group", id: "room" },
       }),
-      { agentId: "main", matchedBy: "default" },
+      { agentId: "main", matchedBy: "binding.account" },
     );
     expectResolvedRoute(
       resolveAgentRoute({

@@ -96,7 +96,10 @@ export async function beginLegacyDefaultAgentOwnerHandoff(
 }
 
 /** Reloads one sealed service and schedules only jobs newly imported during the handoff. */
-export async function refreshLegacyDefaultAgentOwnerHandoff(state: CronServiceState) {
+export async function refreshLegacyDefaultAgentOwnerHandoff(
+  state: CronServiceState,
+  options?: { persistSchedulingState?: boolean },
+) {
   const previousJobIds = new Set(state.store?.jobs.map((job) => job.id) ?? []);
   await ensureLoaded(state, { forceReload: true, skipRecompute: true });
   let scheduledNewJob = false;
@@ -111,7 +114,7 @@ export async function refreshLegacyDefaultAgentOwnerHandoff(state: CronServiceSt
     job.state.nextRunAtMs = computeJobNextRunAtMs(job, state.deps.nowMs());
     scheduledNewJob = true;
   }
-  if (scheduledNewJob) {
+  if (scheduledNewJob && options?.persistSchedulingState !== false) {
     await persist(state, { stateOnly: true });
   }
   armTimer(state);

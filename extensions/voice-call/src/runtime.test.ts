@@ -291,6 +291,18 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.managerInitialize).not.toHaveBeenCalled();
   });
 
+  it("accepts compatibility main ownership for a pre-roster config", async () => {
+    const runtime = await createVoiceCallRuntime({
+      config: createBaseConfig(),
+      coreConfig: {},
+      fullConfig: {},
+      agentRuntime: {} as never,
+    });
+
+    expect(runtime.config.agentId).toBe("main");
+    await runtime.stop();
+  });
+
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({

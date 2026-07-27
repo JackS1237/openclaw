@@ -169,10 +169,7 @@ describe("cron service store seam coverage", () => {
 
   it("refuses a stale cross-process full-store write and reloads the newer epoch", async () => {
     const { storePath } = await makeStorePath();
-    await writeSingleJobStore(
-      storePath,
-      createReloadCronJob({ id: "legacy-ownerless", agentId: undefined }),
-    );
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "legacy-ownerless" }));
     const state = createStoreTestState(storePath);
     await ensureLoaded(state, { skipRecompute: true });
     state.store?.jobs.push(createReloadCronJob({ id: "stale-only" }));
@@ -192,6 +189,47 @@ describe("cron service store seam coverage", () => {
     );
     expect((await loadCronStore(storePath)).jobs).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "stale-only" })]),
+    );
+  });
+
+  it("refuses a stale state-only write and preserves replacement runtime state", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "state-only-epoch";
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({ id: jobId, state: { nextRunAtMs: STORE_TEST_NOW + 60_000 } }),
+    );
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const staleJob = findJobOrThrow(state, jobId);
+    staleJob.state.nextRunAtMs = STORE_TEST_NOW + 120_000;
+
+    const replacementNextRunAtMs = STORE_TEST_NOW + 300_000;
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [
+          createReloadCronJob({
+            id: jobId,
+            name: "replacement topology",
+            state: { nextRunAtMs: replacementNextRunAtMs },
+          }),
+        ],
+      },
+      { expectedStoreEpoch: state.storeEpoch },
+    );
+
+    await expect(persist(state, { stateOnly: true })).rejects.toBeInstanceOf(
+      CronStoreEpochMismatchError,
+    );
+    expect(state.store?.jobs[0]).toMatchObject({
+      id: jobId,
+      name: "replacement topology",
+      state: { nextRunAtMs: replacementNextRunAtMs },
+    });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(
+      replacementNextRunAtMs,
     );
   });
 

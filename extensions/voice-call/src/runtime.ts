@@ -337,6 +337,16 @@ export async function createVoiceCallRuntime(params: {
         hint: "Set the voice-call plugin agentId target.",
       });
   const configuredAgentIds = listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId));
+  if (configuredAgentIds.length === 0) {
+    configuredAgentIds.push(
+      normalizeAgentId(
+        resolveDefaultAgentId(cfg, {
+          surface: "voice-call relay ownership",
+          hint: "Set the voice-call plugin agentId target.",
+        }),
+      ),
+    );
+  }
   if (!configuredAgentIds.includes(configuredAgentId)) {
     throw new AgentSelectionRequiredError(configuredAgentIds, {
       surface: "voice-call relay ownership",

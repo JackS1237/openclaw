@@ -739,17 +739,20 @@ describe("default role materialization authored writes", () => {
     await fs.writeFile(storePath, JSON.stringify([ownerlessJob]), "utf-8");
 
     await withEnvAsync(env, async () => {
-      const cron = new CronService({
-        storePath,
-        cronEnabled: true,
-        resolveDefaultAgentId: () => "ops",
-        isAgentAvailable: () => true,
-        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      await cron.start();
+      const createCron = () =>
+        new CronService({
+          storePath,
+          cronEnabled: true,
+          resolveDefaultAgentId: () => "ops",
+          isAgentAvailable: () => true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+      const cron = createCron();
+      const secondCron = createCron();
+      await Promise.all([cron.start(), secondCron.start()]);
       try {
         const io = createConfigIO({
           configPath,
@@ -780,18 +783,21 @@ describe("default role materialization authored writes", () => {
         expect(loaded.store.jobs).toContainEqual(
           expect.objectContaining({ id: "canonical-owned", agentId: "research" }),
         );
-        expect(cron.getLoadedJobs()).toContainEqual(
-          expect.objectContaining({
-            id: "legacy-json-ownerless",
-            agentId: "ops",
-            state: expect.objectContaining({ nextRunAtMs: expect.any(Number) }),
-          }),
-        );
+        for (const service of [cron, secondCron]) {
+          expect(service.getLoadedJobs()).toContainEqual(
+            expect.objectContaining({
+              id: "legacy-json-ownerless",
+              agentId: "ops",
+              state: expect.objectContaining({ nextRunAtMs: expect.any(Number) }),
+            }),
+          );
+        }
         const source = (await loadLegacyCronStoreForMigration(storePath)).migrationSource;
         expect(source).toBeDefined();
         expect(hasLegacyCronMigrationReceiptReadOnly(source!, env)).toBe(true);
       } finally {
         cron.stop();
+        secondCron.stop();
       }
     });
   });

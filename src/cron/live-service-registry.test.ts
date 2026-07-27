@@ -99,12 +99,22 @@ describe("live cron ownership handoff", () => {
     });
     expect(leader.beginLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
     expect(follower.beginLegacyDefaultAgentOwnerHandoff).not.toHaveBeenCalled();
-    expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
+    expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledWith({
+      persistSchedulingState: false,
+    });
     expect(releaseStoreLock).not.toHaveBeenCalled();
 
     await handoff.refreshSealedServices();
-    expect(leader.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledOnce();
+    expect(leader.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledWith({
+      persistSchedulingState: true,
+    });
     expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenCalledTimes(2);
+    expect(follower.refreshLegacyDefaultAgentOwnerHandoff).toHaveBeenNthCalledWith(2, {
+      persistSchedulingState: false,
+    });
+    expect(leader.refreshLegacyDefaultAgentOwnerHandoff.mock.invocationCallOrder[0]).toBeLessThan(
+      follower.refreshLegacyDefaultAgentOwnerHandoff.mock.invocationCallOrder[1]!,
+    );
 
     handoff.release();
     expect(releaseStoreLock).toHaveBeenCalledOnce();

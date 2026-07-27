@@ -299,7 +299,9 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     const committedStoreEpoch = await saveCronJobsStore(
       state.deps.storePath,
       store,
-      stateOnly ? { stateOnly: true } : { expectedStoreEpoch: state.storeEpoch },
+      stateOnly
+        ? { stateOnly: true, expectedStoreEpoch: state.storeEpoch }
+        : { expectedStoreEpoch: state.storeEpoch },
     );
     if (!stateOnly && committedStoreEpoch !== undefined) {
       state.storeEpoch = committedStoreEpoch;

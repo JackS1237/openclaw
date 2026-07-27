@@ -18,9 +18,11 @@ import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
+  CronStoreEpochMismatchError,
   loadedCronStoreFromRows,
   loadCronRows,
   loadCronRowsWithEpoch,
+  readCronStoreEpoch,
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
@@ -36,7 +38,7 @@ export type {
 } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
 
-export { CronStoreEpochMismatchError } from "./store/row-codec.js";
+export { CronStoreEpochMismatchError };
 
 function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {
   return path.join(resolveConfigDir(env), "cron");
@@ -198,6 +200,10 @@ export async function saveCronJobsStore(
     // untouched so user-authored cron definitions do not churn.
     runOpenClawStateWriteTransaction(
       ({ db }) => {
+        const storeEpoch = readCronStoreEpoch(db, storeKey);
+        if (opts.expectedStoreEpoch !== undefined && opts.expectedStoreEpoch !== storeEpoch) {
+          throw new CronStoreEpochMismatchError(opts.expectedStoreEpoch, storeEpoch);
+        }
         updateCronRuntimeRows(db, storeKey, store);
       },
       { env: opts?.env },

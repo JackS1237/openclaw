@@ -1,6 +1,7 @@
 // Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  AgentSelectionRequiredError,
   listAgentEntries,
   resolveDefaultAgentId,
   tryResolveDefaultAgentId,
@@ -176,7 +177,10 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
   if (resolved) {
     return resolved;
   }
-  return sanitizeAgentId(trimmed);
+  throw new AgentSelectionRequiredError([...lookup.byNormalizedId.values()], {
+    surface: "route binding",
+    hint: `Update the binding agentId "${trimmed}" to a configured agent.`,
+  });
 }
 
 type NormalizedPeerConstraint =
