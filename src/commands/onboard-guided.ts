@@ -1,4 +1,4 @@
-import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,6 +14,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
 import type {
   probeBrowserHatchGateway,
   runBrowserHatchHandoff,
@@ -453,7 +454,10 @@ async function runGuidedOnboardingFlow(
       (entry) => entry.id === onboardingAgent.agentId,
     );
     if (!opts.workspace?.trim() && selectedAgentExists) {
-      appliedWorkspace = resolveAgentWorkspaceDir(onboardingAgent.config, onboardingAgent.agentId);
+      appliedWorkspace = resolveOnboardingAgentTarget(
+        onboardingAgent.config,
+        onboardingAgent.agentId,
+      ).workspaceDir;
     }
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
