@@ -55,7 +55,7 @@ export function registerLiveCronService(
   };
 }
 
-export type LiveCronOwnerHandoff = {
+type LiveCronOwnerHandoff = {
   drainAndSeal: () => Promise<LegacyDefaultCronOwnerMigrationResult>;
   refreshSealedServices: () => Promise<void>;
   release: () => void;

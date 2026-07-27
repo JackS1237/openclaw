@@ -14,6 +14,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
+import { tryGetLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
@@ -119,13 +120,22 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
   return [...ids];
 }
 
+/**
+ * Stable physical anchor for fixed-store collision projection. Markerless configurations use
+ * the legacy `main` slot so roster edits cannot move an unclaimed database. Registered and
+ * database-recorded owners still take precedence in `resolveSqliteTargetFromSessionStorePath`.
+ */
+export function resolveSessionStoreCompatibilityAgentId(cfg: OpenClawConfig): string {
+  return tryGetLegacyDefaultAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID;
+}
+
 /** Lists configured owners plus persisted owners whose registered DB still matches this store. */
 export function listKnownSessionStoreAgentIds(
   cfg: OpenClawConfig,
   params: { env?: NodeJS.ProcessEnv } = {},
 ): string[] {
   const env = params.env ?? process.env;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
   if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: defaultAgentId, env });
@@ -402,7 +412,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
   });
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...validatedConfiguredTargets, ...discoveredTargets],
-    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+    { defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg), env },
   );
 }
 
@@ -415,7 +425,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
   const env = params.env ?? process.env;
   const requested = normalizeAgentId(agentId);
   const storeConfig = cfg.session?.store;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   if (!isPerAgentSessionStoreConfig(storeConfig)) {
     const fixedTarget = {
       agentId: requested,
@@ -564,7 +574,7 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
   });
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...validatedConfiguredTargets, ...discoveredTargets],
-    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+    { defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg), env },
   );
 }
 
@@ -669,13 +679,13 @@ export function resolveSessionStoreTargets(
   if (opts.store && (hasAgent || allAgents)) {
     throw new Error("--store cannot be combined with --agent or --all-agents");
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-
   if (opts.store) {
+    const defaultAgentId = resolveDefaultAgentId(cfg);
     return [resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store })];
   }
 
   if (allAgents) {
+    const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
     const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
       agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId, env }),
@@ -705,6 +715,7 @@ export function resolveSessionStoreTargets(
     ];
   }
 
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   return [
     {
       agentId: defaultAgentId,

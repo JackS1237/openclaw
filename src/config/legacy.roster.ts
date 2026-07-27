@@ -17,7 +17,7 @@ type MigrationResult = {
 };
 
 /** Returns the effective owner encoded by a legacy roster/default-marker shape. */
-export function tryResolveLegacyDefaultAgentId(raw: unknown): string | undefined {
+function tryResolveLegacyDefaultAgentId(raw: unknown): string | undefined {
   const rosterProperty = readAgentRosterProperty(raw);
   if (!rosterProperty) {
     return undefined;

@@ -73,7 +73,7 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-export function listPotentialEnabledChannelIds(
+function listPotentialEnabledChannelIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",

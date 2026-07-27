@@ -709,7 +709,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 commandHighlighting: false,
@@ -741,7 +740,6 @@ describe("config schema", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             tools: {
               exec: {
                 reviewer: {

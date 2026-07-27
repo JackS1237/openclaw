@@ -157,16 +157,6 @@ function materializeLegacyActiveChannelOwners(
   };
 }
 
-/** Materializes all active ambient surfaces for one retained or transitional owner. */
-export function materializeLegacyAgentOwnershipForActiveChannels(
-  config: OpenClawConfig,
-  legacyDefaultAgentId: string,
-  env?: NodeJS.ProcessEnv,
-): OpenClawConfig {
-  return materializeLegacyAgentOwnershipForActiveChannelsResult(config, legacyDefaultAgentId, env)
-    .config;
-}
-
 export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   config: OpenClawConfig,
   legacyDefaultAgentId: string,

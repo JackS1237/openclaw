@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 const legacyDefaultAgentIdByConfig = new WeakMap<object, string>();
 const legacyOwnershipWarningsByConfig = new WeakMap<object, LegacyAgentOwnershipWarning[]>();
 
-export type LegacyAgentOwnershipWarning = {
+type LegacyAgentOwnershipWarning = {
   path: string;
   message: string;
 };

@@ -20,7 +20,7 @@ type GatewayAgentListRow = {
 
 export type GatewayAgentOwnership = "sole" | "legacy" | "explicit";
 
-export type GatewayAgentSelectionState = {
+type GatewayAgentSelectionState = {
   /** Compatibility projection for clients that predate explicit ownership. */
   defaultId: string;
   /** Current ownership contract; new clients must not infer it from defaultId. */

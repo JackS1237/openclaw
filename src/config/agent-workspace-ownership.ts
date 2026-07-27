@@ -4,7 +4,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-export type AgentWorkspaceOwnershipPin = {
+type AgentWorkspaceOwnershipPin = {
   config: OpenClawConfig;
   workspace?: string;
   pluginPath?: string;
