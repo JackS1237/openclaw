@@ -8,7 +8,7 @@ import * as cronStoreModule from "../store.js";
 import { CronStoreEpochMismatchError, loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
-import { reloadForConfigAdoption } from "./ops.js";
+import { reloadForConfigAdoption } from "./ops-lifecycle.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
