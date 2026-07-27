@@ -2886,15 +2886,15 @@ describe("buildGatewayCronService", () => {
       payload: { kind: "agentTurn", message: "explicit" },
     });
     seed.cron.stop();
+    const { agentId: _agentId, ...ownerlessLegacy } = explicit;
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
         explicit,
         {
-          ...explicit,
+          ...ownerlessLegacy,
           id: "ownerless-legacy",
           name: "ownerless-legacy",
-          agentId: undefined,
         },
       ],
     });
