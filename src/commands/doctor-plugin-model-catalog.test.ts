@@ -190,12 +190,15 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(fs.existsSync(workerPath)).toBe(false);
   });
 
-  it("scans every agent in an ownerless explicit fleet", async () => {
+  it("scans physical main alongside an ownerless explicit fleet", async () => {
     const stateDir = createAgentDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     };
+    const mainDir = path.join(stateDir, "agents", "main", "agent");
+    const contents = generatedCatalog("openai", "main-inherited-provider-test-key");
+    const sourcePath = writeLegacyCatalog(mainDir, "openai", contents);
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs({
@@ -204,7 +207,9 @@ describe("doctor generated plugin model catalog migration", () => {
         prompter: prompter(true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
       }),
-    ).resolves.toEqual({ detected: 0, migrated: 0, warnings: [] });
+    ).resolves.toEqual({ detected: 1, migrated: 1, warnings: [] });
+    expect(listPersistedPluginModelCatalogs(mainDir)).toEqual([{ pluginId: "openai", contents }]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("preserves legacy credentials and does not create SQLite when repair is declined", async () => {

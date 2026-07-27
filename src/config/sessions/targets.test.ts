@@ -593,6 +593,24 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
+  it("allows an explicit store path with an explicit fleet agent", () => {
+    const storePath = path.resolve("/tmp/explicit-fleet-sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+
+    expect(resolveSessionStoreTargets(cfg, { agent: "ops", store: storePath })).toEqual([
+      { agentId: "ops", storePath },
+    ]);
+
+    expect(() =>
+      resolveSessionStoreTargets(cfg, {
+        agent: "ops",
+        store: path.resolve("/tmp/agents/research/sessions/sessions.json"),
+      }),
+    ).toThrow('Session store belongs to agent "research", not requested agent "ops"');
+  });
+
   it("accepts case-insensitive legacy main paths but rejects aliases", () => {
     const cfg: OpenClawConfig = { agents: { list: [{ id: "ops", default: true }] } };
     const mainPath = path.resolve("/tmp/agents/Main/sessions/sessions.json");

@@ -34,7 +34,9 @@ function resolveMigrationAgentDirs(params: {
   const env = params.env ?? process.env;
   return [
     ...new Set(
-      listAgentIds(params.cfg).map((agentId) => resolveAgentDir(params.cfg, agentId, env)),
+      ["main", ...listAgentIds(params.cfg)].map((agentId) =>
+        resolveAgentDir(params.cfg, agentId, env),
+      ),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
 }
