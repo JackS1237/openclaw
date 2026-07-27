@@ -14,7 +14,8 @@ import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent, resolveSystemEventQueueKey } from "../../infra/system-events.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-queue-key.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";

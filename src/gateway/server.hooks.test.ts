@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-queue-key.js";
 import {
   drainSystemEvents,
   peekSystemEventEntries,
   peekSystemEvents,
-  resolveSystemEventQueueKey,
 } from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {

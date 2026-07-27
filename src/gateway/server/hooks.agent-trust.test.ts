@@ -23,6 +23,8 @@ const logHooksWarnMock = vi.fn();
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
+}));
+vi.mock("../../infra/system-event-queue-key.js", () => ({
   resolveSystemEventQueueKey: ({
     sessionKey,
     agentId,

@@ -10,11 +10,8 @@ import {
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import {
-  drainSystemEvents,
-  enqueueSystemEvent,
-  resolveSystemEventQueueKey,
-} from "./system-events.js";
+import { resolveSystemEventQueueKey } from "./system-event-queue-key.js";
+import { drainSystemEvents, enqueueSystemEvent } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 

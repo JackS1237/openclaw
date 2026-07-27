@@ -31,9 +31,9 @@ import {
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
 import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import { resolveSystemEventQueueKey } from "./system-event-queue-key.js";
 import {
   peekSystemEventEntries,
-  resolveSystemEventQueueKey,
   resolveSystemEventDeliveryContext,
   type SystemEvent,
 } from "./system-events.js";
