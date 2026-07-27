@@ -4,15 +4,13 @@ import { materializeLegacyDefaultCronJobOwnersInRecords } from "../legacy-defaul
 import { transformCronJobsStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import {
-  computeJobNextRunAtMs,
-  hasScheduledNextRunAtMs,
-  isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { acquireCronOperationLock, locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
+import { prepareReloadedCronJobsForScheduling } from "./reload-scheduling.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import {
   type InterruptedStartupRun,
@@ -103,18 +101,7 @@ export async function refreshLegacyDefaultAgentOwnerHandoff(
 ) {
   const previousJobIds = new Set(state.store?.jobs.map((job) => job.id) ?? []);
   await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-  let scheduledNewJob = false;
-  for (const job of state.store?.jobs ?? []) {
-    if (
-      previousJobIds.has(job.id) ||
-      !isJobEnabled(job) ||
-      hasScheduledNextRunAtMs(job.state.nextRunAtMs)
-    ) {
-      continue;
-    }
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, state.deps.nowMs());
-    scheduledNewJob = true;
-  }
+  const scheduledNewJob = prepareReloadedCronJobsForScheduling(state, { previousJobIds });
   if (scheduledNewJob && options?.persistSchedulingState !== false) {
     await persist(state, { stateOnly: true });
   }

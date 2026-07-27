@@ -98,7 +98,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
         createDueIsolatedJob({ id: "default-job", nowMs: now }),
         {
           ...createDueIsolatedJob({ id: "worker-job", nowMs: now }),
-          agentId: undefined,
           enabled: false,
           sessionKey: "agent:worker:main",
           sessionTarget: "main",
@@ -239,10 +238,10 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
-  it("sweeps explicit multi-agent stores without a configured default", async () => {
+  it("sweeps a shared multi-agent store once without rotating unscoped ownership", async () => {
     const store = await makeStorePath();
-    const now = Date.parse("2026-02-10T10:00:00.000Z");
-    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    let now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "shared.sqlite");
     await saveCronStore(store.storePath, { version: 1, jobs: [] });
     for (const agentId of ["ops", "research"]) {
       await replaceSessionEntry(
@@ -254,6 +253,15 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
         { sessionId: `${agentId}-expired`, updatedAt: now - 25 * 3_600_000 },
       );
     }
+    await replaceSessionEntry(
+      {
+        agentId: "ops",
+        storePath: sessionStorePath,
+        sessionKey: "global",
+      },
+      { sessionId: "unscoped-stable", updatedAt: now - 25 * 3_600_000 },
+    );
+    let reverseRoster = false;
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
@@ -263,14 +271,28 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       resolveDefaultAgentId: () => undefined,
-      resolveSessionStoreAgentIds: () => ["ops", "research"],
+      resolveSessionStoreAgentIds: () => {
+        reverseRoster = !reverseRoster;
+        return reverseRoster ? ["ops", "research"] : ["research", "ops"];
+      },
       sessionStorePath,
     });
 
     await withCronServiceStateForTest(state, async () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
-      expect(listSessionEntries({ agentId: "ops", storePath: sessionStorePath })).toEqual([]);
-      expect(listSessionEntries({ agentId: "research", storePath: sessionStorePath })).toEqual([]);
+      const afterFirstSweep = listSessionEntries({ agentId: "ops", storePath: sessionStorePath });
+      expect(afterFirstSweep).toEqual([
+        expect.objectContaining({
+          sessionKey: "global",
+          entry: expect.objectContaining({ sessionId: "unscoped-stable" }),
+        }),
+      ]);
+
+      now += 5 * 60_000;
+      await expect(onTimer(state)).resolves.toBeUndefined();
+      expect(listSessionEntries({ agentId: "research", storePath: sessionStorePath })).toEqual(
+        afterFirstSweep,
+      );
     });
   });
 

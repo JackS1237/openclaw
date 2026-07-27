@@ -1,11 +1,11 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
-import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -20,10 +20,6 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
 const lastSweepAtMsByTarget = new Map<string, number>();
-
-function reaperTargetKey(agentId: string, storePath: string): string {
-  return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
-}
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
@@ -55,7 +51,10 @@ type ReaperResult = {
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
-  defaultAgentId: string;
+  /** Logical owners partitioned inside this physical session store. */
+  agentIds?: readonly string[];
+  /** Ambient owner for legacy unscoped rows; absent means leave them untouched. */
+  defaultAgentId?: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;
@@ -70,12 +69,15 @@ export async function sweepCronRunSessions(params: {
 
   const now = params.nowMs ?? Date.now();
   const storePath = params.sessionStorePath;
-  // Shared physical stores still hold agent-scoped rows. The throttle also
-  // suppresses in-flight attempts, so its identity must retain both scopes.
-  const targetKey = reaperTargetKey(params.agentId, storePath);
+  const resolvedTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+  });
+  // One physical database gets one sweep, even when it contains many scoped owners.
+  const targetKey = resolvedTarget.path;
   const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
-  // Timer ticks can be frequent; throttle per agent/store target to avoid
+  // Timer ticks can be frequent; throttle per physical store target to avoid
   // repeated session-store I/O while preserving a force path for tests.
   if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
@@ -89,7 +91,13 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
-    const requestedOwner = normalizeAgentId(params.agentId);
+    const requestedOwners = new Set(
+      (params.agentIds ?? [params.agentId]).map((agentId) => normalizeAgentId(agentId)),
+    );
+    const sharedUnscopedOwner =
+      resolvedTarget.shared && params.defaultAgentId
+        ? normalizeAgentId(params.defaultAgentId)
+        : undefined;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
@@ -98,11 +106,16 @@ export async function sweepCronRunSessions(params: {
       agentId: params.agentId,
       storePath,
     })) {
-      if (!isCronRunSessionKey(sessionKey)) {
+      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+      if (
+        (scopedOwner && !requestedOwners.has(normalizeAgentId(scopedOwner))) ||
+        (!scopedOwner &&
+          resolvedTarget.shared &&
+          (!sharedUnscopedOwner || !requestedOwners.has(sharedUnscopedOwner)))
+      ) {
         continue;
       }
-      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
-      if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
+      if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;

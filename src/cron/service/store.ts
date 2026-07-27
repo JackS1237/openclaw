@@ -13,6 +13,7 @@ import {
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
+import { prepareReloadedCronJobsForScheduling } from "./reload-scheduling.js";
 import { emit, type CronServiceState } from "./state.js";
 
 type PersistOptions = {
@@ -309,9 +310,14 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
   } catch (error) {
     if (error instanceof CronStoreEpochMismatchError) {
       // Another process changed ownership/topology. Refuse this stale snapshot
-      // and make subsequent service operations observe the durable replacement.
+      // and publish the durable replacement to the scheduler before returning.
       try {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        prepareReloadedCronJobsForScheduling(state);
+        // Store loading is timer-owned, so keep this rare conflict path lazy to avoid
+        // a store -> scheduler -> store module-initialization cycle.
+        const { armTimer } = await import("./timer.js");
+        armTimer(state);
       } catch (reloadError) {
         // Preserve the mismatch classification so persistOrRestore cannot put
         // the stale snapshot back. The next operation must load from SQLite.

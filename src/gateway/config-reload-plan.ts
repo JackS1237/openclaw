@@ -156,8 +156,9 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 
 const WHOLE_AGENTS_RELOAD_RULE: ReloadRule = {
   prefix: "agents",
-  kind: "hot",
-  actions: ["restart-heartbeat"],
+  // A whole-object diff can hide defaults.workspace and other startup-owned
+  // fields, so only expanded child paths are eligible for narrower hot rules.
+  kind: "restart",
 };
 
 let cachedReloadRules: ReloadRule[] | null = null;

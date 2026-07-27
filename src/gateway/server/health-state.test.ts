@@ -6,9 +6,14 @@ import type { HealthSummary } from "../../commands/health.js";
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
  */
 const getHealthSnapshotMock = vi.hoisted(() => vi.fn());
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/health.js", () => ({
   getHealthSnapshot: getHealthSnapshotMock,
+}));
+vi.mock("../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  getRuntimeConfig: getRuntimeConfigMock,
 }));
 
 function healthSnapshotCallArg(index = 0) {
@@ -46,12 +51,30 @@ async function loadHealthState() {
   vi.resetModules();
   getHealthSnapshotMock.mockReset();
   getHealthSnapshotMock.mockResolvedValue(createHealthSummary());
+  getRuntimeConfigMock.mockReset().mockReturnValue({ agents: { entries: { main: {} } } });
   return await import("./health-state.js");
 }
 
 describe("refreshGatewayHealthSnapshot", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps legacy snapshot defaults populated while exposing ownerless fleet selection", async () => {
+    const healthState = await loadHealthState();
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      session: { mainKey: "inbox", scope: "per-sender" },
+    });
+
+    expect(healthState.buildGatewaySnapshot().sessionDefaults).toEqual({
+      defaultAgentId: "ops",
+      ownership: "explicit",
+      selectionRequired: true,
+      mainKey: "inbox",
+      mainSessionKey: "agent:ops:inbox",
+      scope: "per-sender",
+    });
   });
 
   it("keeps refreshes coalesced while preserving the first probe intent", async () => {

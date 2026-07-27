@@ -193,6 +193,38 @@ describe("cron service store seam coverage", () => {
     );
   });
 
+  it("re-arms the scheduler for a due job discovered by an epoch-mismatch reload", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "stale-snapshot" }));
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(
+      storePath,
+      {
+        version: 1,
+        jobs: [
+          createReloadCronJob({
+            id: "newly-visible-due",
+            state: { nextRunAtMs: STORE_TEST_NOW - 1_000 },
+          }),
+        ],
+      },
+      { expectedStoreEpoch: state.storeEpoch },
+    );
+
+    expect(state.timer).toBeNull();
+    await expect(persist(state)).rejects.toBeInstanceOf(CronStoreEpochMismatchError);
+
+    expect(state.store?.jobs).toEqual([
+      expect.objectContaining({
+        id: "newly-visible-due",
+        state: expect.objectContaining({ nextRunAtMs: STORE_TEST_NOW - 1_000 }),
+      }),
+    ]);
+    expect(state.timer).not.toBeNull();
+  });
+
   it("reloads externally migrated rows before config adoption", async () => {
     const { storePath } = await makeStorePath();
     await writeSingleJobStore(storePath, createReloadCronJob({ id: "external-owner" }));

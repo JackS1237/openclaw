@@ -17,6 +17,7 @@ import {
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
+import { SnapshotSchema } from "./snapshot.js";
 
 describe("AgentsDeleteResultSchema", () => {
   it("accepts per-path cleanup outcomes", () => {
@@ -88,6 +89,24 @@ describe("AgentsListResultSchema", () => {
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
   });
 
+  it("keeps the legacy default required while accepting additive ownership metadata", () => {
+    const legacy = {
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "research" }],
+    };
+    const current = {
+      ...legacy,
+      ownership: "explicit",
+      selectionRequired: true,
+    };
+
+    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
+  });
+
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
     const result = {
       defaultId: "main",
@@ -101,6 +120,41 @@ describe("AgentsListResultSchema", () => {
       Value.Check(AgentsListResultSchema, {
         ...result,
         agents: [{ id: "custodian", kind: "worker" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("SnapshotSchema agent ownership", () => {
+  const base = {
+    presence: [],
+    health: {},
+    stateVersion: { presence: 1, health: 1 },
+    uptimeMs: 1,
+  };
+
+  it("keeps legacy session defaults required and accepts additive ownership state", () => {
+    const legacyDefaults = {
+      defaultAgentId: "ops",
+      mainKey: "main",
+      mainSessionKey: "agent:ops:main",
+      scope: "per-sender",
+    };
+    expect(Value.Check(SnapshotSchema, { ...base, sessionDefaults: legacyDefaults })).toBe(true);
+    expect(
+      Value.Check(SnapshotSchema, {
+        ...base,
+        sessionDefaults: {
+          ...legacyDefaults,
+          ownership: "explicit",
+          selectionRequired: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SnapshotSchema, {
+        ...base,
+        sessionDefaults: { mainKey: "main", scope: "per-sender" },
       }),
     ).toBe(false);
   });

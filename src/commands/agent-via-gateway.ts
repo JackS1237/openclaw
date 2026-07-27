@@ -94,6 +94,9 @@ type AgentCliOpts = {
 type RemoteGatewayRoster = {
   agentIds: string[];
   entries: Array<{ id: string; name?: string }>;
+  defaultId: string;
+  ownership?: AgentsListResult["ownership"];
+  selectionRequired: boolean;
   mainKey: string;
   scope: AgentsListResult["scope"];
 };
@@ -209,9 +212,34 @@ async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatew
       hint: "Pass --agent <id>; the remote gateway returned no selectable agents.",
     });
   }
+  const defaultId = normalizeOptionalString(result.defaultId);
+  if (!defaultId) {
+    throw new AgentSelectionRequiredError(
+      entries.map((entry) => entry.id),
+      {
+        surface: "remote gateway agent turn",
+        hint: "Pass --agent <id>; the remote gateway returned no compatibility agent owner.",
+      },
+    );
+  }
+  const normalizedDefaultId = normalizeAgentId(defaultId);
+  if (!entries.some((entry) => entry.id === normalizedDefaultId)) {
+    throw new AgentSelectionRequiredError(
+      entries.map((entry) => entry.id),
+      {
+        surface: "remote gateway agent turn",
+        hint: `Pass --agent <id>; the remote gateway returned unavailable default agent "${defaultId}".`,
+      },
+    );
+  }
   return {
     agentIds: entries.map((entry) => entry.id),
     entries,
+    defaultId: normalizedDefaultId,
+    ownership: result.ownership,
+    // Old gateways expose only defaultId, where it remains authoritative.
+    selectionRequired:
+      result.selectionRequired ?? (result.ownership ? result.ownership !== "sole" : false),
     mainKey: result.mainKey,
     scope: result.scope,
   };
@@ -480,13 +508,21 @@ async function normalizeSessionKeyOptsForDispatch(
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig());
     selectionCfg = cfg;
-    const selectedAgentId = await resolveCliAgentId({
-      cfg,
-      runtime,
-      surface: "agent turn",
-      deps: opts.json ? { ...deps?.agentSelection, interactive: false } : deps?.agentSelection,
-    });
-    const implicitSoleAgent = tryResolveSoleAgentId(cfg) === selectedAgentId;
+    const selectedAgentId =
+      remoteGatewayRoster && !remoteGatewayRoster.selectionRequired
+        ? remoteGatewayRoster.defaultId
+        : await resolveCliAgentId({
+            cfg,
+            runtime,
+            surface: "agent turn",
+            deps: opts.json
+              ? { ...deps?.agentSelection, interactive: false }
+              : deps?.agentSelection,
+          });
+    const implicitSoleAgent = remoteGatewayRoster
+      ? remoteGatewayRoster.ownership === "sole" ||
+        (!remoteGatewayRoster.ownership && remoteGatewayRoster.agentIds.length === 1)
+      : tryResolveSoleAgentId(cfg) === selectedAgentId;
     agentIdRaw =
       implicitSoleAgent && isUnscopedSessionKeySentinel(rawSessionKey)
         ? undefined

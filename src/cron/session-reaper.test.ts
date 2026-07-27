@@ -228,17 +228,9 @@ describe("sweepCronRunSessions", () => {
       }),
     ).toMatchObject({ sessionId: "ops-run" });
 
-    expect(
-      await sweepCronRunSessionsImpl({
-        agentId: "main",
-        defaultAgentId: "main",
-        sessionStorePath: exactStorePath,
-        nowMs: now,
-        log,
-      }),
-    ).toEqual({ swept: true, pruned: 0 });
     const result = await sweepCronRunSessionsImpl({
-      agentId: "ops",
+      agentId: "main",
+      agentIds: ["main", "ops"],
       defaultAgentId: "main",
       sessionStorePath: exactStorePath,
       nowMs: now,

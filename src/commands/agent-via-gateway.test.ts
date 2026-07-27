@@ -784,7 +784,9 @@ describe("agentCliCommand", () => {
       const request = requireRecord(requestValue, "gateway request");
       if (request.method === "agents.list") {
         return {
-          defaultId: undefined,
+          defaultId: "ops",
+          ownership: "explicit",
+          selectionRequired: true,
           mainKey: "main",
           scope: "per-sender",
           agents: [
@@ -821,6 +823,45 @@ describe("agentCliCommand", () => {
         ).toEqual(["agents.list", "agent"]);
         const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
         expect(requireRecord(agentRequest.params, "agent params").agentId).toBe("research");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("uses an old remote gateway default only when ownership metadata is absent", async () => {
+    const selectAgent = vi.fn(async () => "research");
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi" }, runtime, {
+          agentSelection: { interactive: true, selectAgent },
+        });
+
+        expect(selectAgent).not.toHaveBeenCalled();
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        expect(requireRecord(agentRequest.params, "agent params").agentId).toBe("ops");
       },
       {
         agents: { list: [{ id: "local-main" }] },
@@ -885,7 +926,9 @@ describe("agentCliCommand", () => {
       const request = requireRecord(requestValue, "gateway request");
       if (request.method === "agents.list") {
         return {
-          defaultId: undefined,
+          defaultId: "ops",
+          ownership: "sole",
+          selectionRequired: false,
           mainKey: "remote-main",
           scope: "global",
           agents: [{ id: "ops", name: "Operations" }],

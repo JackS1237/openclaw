@@ -1,14 +1,14 @@
 // Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { tryResolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -23,10 +23,12 @@ let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
   const cfg = getRuntimeConfig();
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const selection = resolveGatewayAgentSelectionState(cfg);
+  const defaultAgentId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  const mainSessionKey = defaultAgentId ? resolveMainSessionKey(cfg) : undefined;
   const scope = cfg.session?.scope ?? "per-sender";
+  const mainSessionKey =
+    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const updateAvailable = getUpdateAvailable() ?? undefined;
@@ -39,9 +41,11 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
     uptimeMs,
     appliedConfigHash: getRuntimeConfigAppliedHash(),
     sessionDefaults: {
-      ...(defaultAgentId ? { defaultAgentId } : {}),
+      defaultAgentId,
+      ownership: selection.ownership,
+      selectionRequired: selection.selectionRequired,
       mainKey,
-      ...(mainSessionKey ? { mainSessionKey } : {}),
+      mainSessionKey,
       scope,
     },
     updateAvailable,

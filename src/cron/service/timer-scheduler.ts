@@ -1,4 +1,5 @@
 import pMap, { pMapSkip } from "p-map";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
@@ -586,9 +587,22 @@ async function onAdmittedTimer(state: CronServiceState) {
     // Placed in `finally` so the reaper runs even when a long-running job keeps
     // `state.running` true across multiple timer ticks — the early return at the
     // top of onTimer would otherwise skip the reaper indefinitely.
-    const storeTargets = new Map<string, { agentId: string; storePath: string }>();
+    const storeTargets = new Map<string, { agentIds: Set<string>; storePath: string }>();
     const addStoreTarget = (agentId: string, storePath: string) => {
-      storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
+      const normalizedAgentId = normalizeAgentId(agentId);
+      const physicalPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: normalizedAgentId,
+        defaultAgentId: sessionReaperDefaultAgentId,
+      }).path;
+      const existing = storeTargets.get(physicalPath);
+      if (existing) {
+        existing.agentIds.add(normalizedAgentId);
+        return;
+      }
+      storeTargets.set(physicalPath, {
+        agentIds: new Set([normalizedAgentId]),
+        storePath,
+      });
     };
     const resolveJobAgentId = (job: CronJob, defaultAgentId?: string) => {
       const owner = job.agentId?.trim() || parseAgentSessionKey(job.sessionKey)?.agentId;
@@ -629,11 +643,17 @@ async function onAdmittedTimer(state: CronServiceState) {
 
     if (storeTargets.size > 0) {
       const nowMs = state.deps.nowMs();
-      for (const { agentId, storePath } of storeTargets.values()) {
+      for (const { agentIds, storePath } of storeTargets.values()) {
+        const orderedAgentIds = [...agentIds].toSorted();
+        const agentId = orderedAgentIds[0];
+        if (!agentId) {
+          continue;
+        }
         try {
           await sweepCronRunSessions({
             agentId,
-            defaultAgentId: sessionReaperDefaultAgentId ?? agentId,
+            agentIds: orderedAgentIds,
+            defaultAgentId: sessionReaperDefaultAgentId,
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
             nowMs,
