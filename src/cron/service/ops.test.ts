@@ -159,6 +159,28 @@ describe("cron agent ownership reloads", () => {
     }
   });
 
+  it("rejects mismatched explicit owners during creation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      resolveDefaultAgentId: () => undefined,
+      isAgentAvailable: () => true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+
+    await expect(
+      add(state, {
+        ...createInput("mismatched-create-owner"),
+        agentId: "ops",
+        sessionKey: "agent:research:main",
+      }),
+    ).rejects.toThrow("cron job agentId ops does not match sessionKey owner research");
+  });
+
   it("revalidates both cleared and retargeted session ownership patches", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();

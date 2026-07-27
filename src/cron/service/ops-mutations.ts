@@ -184,6 +184,25 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
   };
 }
 
+function resolveScopedOwnerForMutation(
+  job: { agentId?: string | null; sessionKey?: string | null },
+  explicitOwnerSupplied: boolean,
+): string | undefined {
+  const scopedAgentId = normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId);
+  const configuredAgentId = normalizeOptionalAgentId(job.agentId);
+  if (
+    explicitOwnerSupplied &&
+    scopedAgentId &&
+    configuredAgentId &&
+    scopedAgentId !== configuredAgentId
+  ) {
+    throw new Error(
+      `cron job agentId ${configuredAgentId} does not match sessionKey owner ${scopedAgentId}`,
+    );
+  }
+  return scopedAgentId;
+}
+
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */
 export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
   return await locked(state, async () => {
@@ -195,7 +214,14 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
     }
     await ensureLoaded(state, { skipRecompute: true });
-    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    const scopedAgentId = resolveScopedOwnerForMutation(
+      input,
+      normalizeOptionalAgentId(input.agentId) !== undefined,
+    );
+    const agentId = resolveEffectiveJobAgentId(
+      { ...input, ...(scopedAgentId ? { agentId: input.agentId ?? scopedAgentId } : {}) },
+      resolveCurrentDefaultAgentId(state),
+    );
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
@@ -340,20 +366,7 @@ export async function updateLoadedJob(params: {
     scheduledToolPolicy: opts?.scheduledToolPolicy,
   });
   if ("agentId" in patch || "sessionKey" in patch) {
-    const scopedAgentId = normalizeOptionalAgentId(
-      parseAgentSessionKey(nextJob.sessionKey)?.agentId,
-    );
-    const configuredAgentId = normalizeOptionalAgentId(nextJob.agentId);
-    if (
-      "agentId" in patch &&
-      scopedAgentId &&
-      configuredAgentId &&
-      scopedAgentId !== configuredAgentId
-    ) {
-      throw new Error(
-        `cron job agentId ${configuredAgentId} does not match sessionKey owner ${scopedAgentId}`,
-      );
-    }
+    const scopedAgentId = resolveScopedOwnerForMutation(nextJob, "agentId" in patch);
     if (scopedAgentId) {
       // A scoped session-key retarget is itself an ownership retarget. Persist
       // the same owner in agentId so timer and session-store routing agree,

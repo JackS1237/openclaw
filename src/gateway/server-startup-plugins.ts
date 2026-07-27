@@ -1,6 +1,9 @@
 // Gateway plugin startup bootstrap.
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
-import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  tryResolveConfiguredAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -29,6 +32,23 @@ type GatewayPluginBootstrapLog = {
 type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
+
+function resolveGatewayPluginWorkspaceDir(config: OpenClawConfig): string | undefined {
+  const configured = tryResolveConfiguredAgentWorkspaceDir(config);
+  if (configured) {
+    return configured;
+  }
+  if (listAgentEntries(config).length <= 1) {
+    return resolveDefaultAgentWorkspaceDir();
+  }
+  const explicitLoadPaths = config.plugins?.load?.paths;
+  if (Array.isArray(explicitLoadPaths) && explicitLoadPaths.some((entry) => entry.trim())) {
+    return undefined;
+  }
+  throw new Error(
+    "Multi-agent plugin discovery needs a shared agents.defaults.workspace or explicit plugins.load.paths.",
+  );
+}
 
 /** Returns the config snapshot used by channel/plugin startup maintenance. */
 export function resolveGatewayStartupMaintenanceConfig(params: {
@@ -129,8 +149,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultWorkspaceDir =
-    tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig) ?? resolveDefaultAgentWorkspaceDir();
+  const defaultWorkspaceDir = resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
@@ -259,7 +278,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];

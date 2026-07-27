@@ -5,8 +5,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -35,7 +36,7 @@ export type HooksConfigResolved = {
 };
 
 type HookAgentPolicyResolved = {
-  defaultAgentId: string;
+  defaultAgentId?: string;
   knownAgentIds: Set<string>;
   allowedAgentIds?: Set<string>;
 };
@@ -64,7 +65,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     throw new Error("hooks.path may not be '/'");
   }
   const mappings = resolveHookMappings(cfg.hooks);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryGetLegacyDefaultAgentId(cfg) ?? tryResolveSoleAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
@@ -110,9 +111,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   };
 }
 
-function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {
+function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId?: string): Set<string> {
   const known = new Set(listAgentIds(cfg));
-  known.add(defaultAgentId);
+  if (defaultAgentId) {
+    known.add(defaultAgentId);
+  }
   return known;
 }
 
@@ -231,6 +234,7 @@ type HookAgentPayload = {
 
 /** Normalized agent dispatch payload after hook policy/session resolution. */
 export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
+  effectiveAgentId: string;
   sessionKey: string;
   sourcePath: string;
   allowUnsafeExternalContent?: boolean;
@@ -308,7 +312,7 @@ export function resolveHookTargetAgentId(
 export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
-): string {
+): string | undefined {
   return resolveHookTargetAgentId(hooksConfig, agentId) ?? hooksConfig.agentPolicy.defaultAgentId;
 }
 
@@ -323,11 +327,15 @@ export function isHookAgentAllowed(
   }
   // Omitted agentId still dispatches to the default agent downstream, so the
   // allowlist must authorize that effective target before dispatch.
-  return allowed.has(resolveEffectiveHookTargetAgentId(hooksConfig, agentId));
+  const effectiveAgentId = resolveEffectiveHookTargetAgentId(hooksConfig, agentId);
+  return effectiveAgentId !== undefined && allowed.has(effectiveAgentId);
 }
 
 /** Error message for hook agent allowlist failures. */
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
+
+export const getHookAgentSelectionError = () =>
+  "agentId is required when multiple agents are configured";
 const getHookSessionKeyRequestPolicyError = () =>
   "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
 /** Error message for hook session-key prefix allowlist failures. */

@@ -1378,7 +1378,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it("discovers trusted external channel plugins from the default agent workspace", () => {
+  it("discovers trusted external channel plugins from a shared fleet workspace", () => {
     const workspaceDir = makeTempDir();
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "external-chat-plugin");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -1390,9 +1390,11 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     const plugins = listReadOnlyChannelPluginsForConfig(
       {
         agents: {
+          ownership: "explicit",
           defaults: {
             workspace: workspaceDir,
           },
+          entries: { ops: {}, research: {} },
         },
         channels: {
           "external-chat": { token: "configured" },

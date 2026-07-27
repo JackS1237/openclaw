@@ -113,6 +113,16 @@ vi.mock("../agents/agent-scope.js", () => ({
     cfg.agents?.defaults?.workspace ?? "/workspace",
 }));
 
+vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope-config.js")>();
+  return {
+    ...actual,
+    tryResolveConfiguredAgentWorkspaceDir: (cfg: OpenClawConfig) =>
+      cfg.agents?.defaults?.workspace ??
+      (Object.keys(cfg.agents?.entries ?? {}).length > 1 ? undefined : "/workspace"),
+  };
+});
+
 vi.mock("../agents/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
 }));
@@ -425,6 +435,24 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(firstCallArg<{ workspaceDir?: string }>(loadPluginLookUpTable).workspaceDir).toBe(
       "/srv/fleet-workspace",
     );
+  });
+
+  it("rejects ambiguous fleet workspace discovery without explicit plugin paths", async () => {
+    await expect(
+      prepareBootstrapWithRuntimeConfig({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { workspace: "/srv/ops" },
+            research: { workspace: "/srv/research" },
+          },
+        },
+        plugins: {},
+      }),
+    ).rejects.toThrow(
+      "Multi-agent plugin discovery needs a shared agents.defaults.workspace or explicit plugins.load.paths.",
+    );
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {

@@ -3,7 +3,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import {
   drainSystemEvents,
   peekSystemEventEntries,
@@ -15,14 +16,14 @@ import {
   installGatewayTestHooks,
   testState,
   withGatewayServer,
-  waitForSystemEvent,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 await import("./server.js");
 
-const resolveMainKey = () => resolveMainSessionKeyFromConfig();
+const resolveMainKey = () =>
+  resolveAgentMainSessionKey({ cfg: getRuntimeConfig(), agentId: "main" });
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
@@ -179,6 +180,10 @@ async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
     })
     .not.toHaveLength(0);
   return peekSystemEventEntries(sessionKey).map((event) => event.text);
+}
+
+async function waitForSystemEvent(timeoutMs = 2_000) {
+  return await waitForSystemEventTexts(resolveMainKey(), timeoutMs);
 }
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
@@ -982,9 +987,11 @@ describe("gateway server hooks", () => {
       expect(resNoAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBeUndefined();
+      expect(noAgentCall?.job?.agentId).toBe("main");
       expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
-      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
+      expect(peekSystemEventEntries("agent:main:main").map((event) => event.text)).toContain(
+        "Hook Hook: done",
+      );
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -995,7 +1002,7 @@ describe("gateway server hooks", () => {
       expect(resBlankAgent.status).toBe(200);
       await waitForSystemEventTexts(resolveMainKey());
       const blankAgentCall = cronRunCall();
-      expect(blankAgentCall?.job?.agentId).toBeUndefined();
+      expect(blankAgentCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
     });
   });

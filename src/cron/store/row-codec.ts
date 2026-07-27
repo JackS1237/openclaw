@@ -2,7 +2,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -436,7 +435,7 @@ function incrementCronStoreEpoch(db: DatabaseSync, storeKey: string): number {
     db,
     getCronStoreKysely(db)
       .updateTable("cron_store_epochs")
-      .set({ store_epoch: sql<number>`store_epoch + 1` })
+      .set((eb) => ({ store_epoch: eb("store_epoch", "+", 1) }))
       .where("store_key", "=", storeKey)
       .returning("store_epoch"),
   ).rows[0];

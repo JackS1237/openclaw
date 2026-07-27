@@ -252,6 +252,27 @@ describe("secrets runtime fast path", () => {
     }
   });
 
+  it("collects the physical main inheritance store for an explicit fleet", async () => {
+    const { collectCandidateAgentDirs } = await import("./runtime-fast-path.js");
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-explicit-fleet-"));
+    const env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_STATE_DIR: root };
+
+    try {
+      expect(
+        collectCandidateAgentDirs(
+          asConfig({ agents: { ownership: "explicit", entries: { ops: {}, research: {} } } }),
+          env,
+        ),
+      ).toEqual([
+        path.join(root, "agents", "main", "agent"),
+        path.join(root, "agents", "ops", "agent"),
+        path.join(root, "agents", "research", "agent"),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("detects retired OAuth before entering the secrets fast path", async () => {
     const { assertAuthProfileMigrationReady, hasLegacyAuthProfileSourcesForStartup } =
       await import("../agents/auth-profiles/legacy-source-diagnostic.js");
@@ -309,8 +330,8 @@ describe("secrets runtime fast path", () => {
 
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
       const active = getActiveSecretsRuntimeSnapshot();
-      expect(active?.authStores[0]?.agentDir).toBe(agentDir);
-      expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      const refreshedStore = active?.authStores.find((entry) => entry.agentDir === agentDir);
+      expect(refreshedStore?.store.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",
         key: "sk-test",
@@ -472,6 +493,7 @@ describe("secrets runtime fast path", () => {
       OPENCLAW_STATE_DIR: root,
     };
     const agentDir = path.join(root, "custom-agent");
+    const mainAgentDir = path.join(root, "agents", "main", "agent");
     mkdirSync(agentDir, { recursive: true });
 
     try {
@@ -485,7 +507,10 @@ describe("secrets runtime fast path", () => {
       });
 
       expect(fastPath).not.toBeNull();
-      expect(fastPath!.snapshot.authStores).toEqual([{ agentDir, store: emptyAuthStore() }]);
+      expect(fastPath!.snapshot.authStores).toEqual([
+        { agentDir: mainAgentDir, store: emptyAuthStore() },
+        { agentDir, store: emptyAuthStore() },
+      ]);
       activateSecretsRuntimeSnapshotState({
         snapshot: fastPath!.snapshot,
         refreshContext: fastPath!.refreshContext,
