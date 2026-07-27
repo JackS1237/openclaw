@@ -47,11 +47,15 @@ vi.mock("./agent-model-discovery.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
+    agentId === "default" || agentId === "main"
+      ? "/tmp/unused-agent"
+      : `/tmp/configured-${agentId}`,
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
@@ -892,7 +896,7 @@ describe("prepared model runtime snapshots", () => {
     );
   });
 
-  it("tracks default auth inheritance when the owner omits the directory", async () => {
+  it("tracks main auth inheritance when the owner omits the directory", async () => {
     const config = {};
     const agentDir = "/tmp/prepared-model-runtime-implicit-inheritance";
     await publishPreparedModelRuntimeSnapshot({ config, agentDir });

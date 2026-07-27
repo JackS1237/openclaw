@@ -165,7 +165,11 @@ export function migratePersistedImplicitMainRoster(
   }
 
   const entries = rosterProperty?.kind === "entries" ? rosterProperty.value : undefined;
+  const explicitOwnership = agents.ownership === "explicit";
   if (!rosterProperty) {
+    if (explicitOwnership) {
+      return { config: changed ? { ...root, agents } : raw, changed, diagnostics };
+    }
     const injected = injectImplicitMain(root, agents);
     return { ...injected, diagnostics: [...diagnostics, ...injected.diagnostics] };
   }
@@ -174,6 +178,9 @@ export function migratePersistedImplicitMainRoster(
   }
   const roster = entries as Record<string, unknown>;
   if (Object.keys(roster).length === 0) {
+    if (explicitOwnership) {
+      return { config: changed ? { ...root, agents } : raw, changed, diagnostics };
+    }
     const injected = injectImplicitMain(root, agents);
     return { ...injected, diagnostics: [...diagnostics, ...injected.diagnostics] };
   }
@@ -210,7 +217,6 @@ export function migratePersistedImplicitMainRoster(
     (legacyListOrder || hasBooleanMarker ? orderedValidIds[0] : undefined);
   const markerFreeFleet = validIds.length > 1 && !hasBooleanMarker;
   let nextRoot: Record<string, unknown> = { ...root, agents };
-  const explicitOwnership = agents.ownership === "explicit";
   // Retired boolean markers always carry shipped ownership. Marker-free fleets
   // retain first-entry ownership only until Doctor stamps the durable generation.
   const legacyDefaultAgentId =

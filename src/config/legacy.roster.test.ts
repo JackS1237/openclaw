@@ -421,6 +421,19 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it.each([{ ownership: "explicit" as const }, { ownership: "explicit" as const, entries: {} }])(
+    "leaves an explicitly empty fleet for schema rejection",
+    (agents) => {
+      const raw = { agents };
+      expect(migratePersistedImplicitMainRoster(raw)).toEqual({
+        config: raw,
+        changed: false,
+        diagnostics: [],
+      });
+      expect(validateConfigObjectRaw(raw).ok).toBe(false);
+    },
+  );
+
   it.each([
     {
       label: "legacy marker-free entries",

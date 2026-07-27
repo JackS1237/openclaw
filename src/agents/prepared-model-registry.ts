@@ -120,7 +120,7 @@ function resolveInput(
     agentId,
     agentDir,
     config,
-    inheritedAuthDir: agentDir,
+    inheritedAuthDir: resolveAgentDir(config, "main"),
     ...(usesCredentialFreeRegistry(options) ? { skipCredentials: true } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };

@@ -216,7 +216,9 @@ export function normalizePreparedModelRuntimeInput(
     workspaceDir: _workspaceDir,
     ...rest
   } = input;
-  const inheritedAuthDir = normalizeOptionalDir(input.inheritedAuthDir ?? input.agentDir);
+  const inheritedAuthDir = normalizeOptionalDir(
+    input.inheritedAuthDir ?? resolveAgentDir(input.config, "main", input.env),
+  );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
   return {
@@ -369,6 +371,7 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
 ): PreparedModelRuntimeInput[] {
   const soleAgentId = tryResolveSoleAgentId(config);
+  const inheritedAuthDir = resolveAgentDir(config, "main");
   return listAgentIds(config).map((agentId) => {
     const agentDir = resolveAgentDir(config, agentId);
     const preserveWorkspaceDirOnRefresh = agentId === soleAgentId && defaultWorkspaceDir;
@@ -376,7 +379,7 @@ export function listConfiguredOwnerInputs(
       agentId,
       agentDir,
       config,
-      inheritedAuthDir: agentDir,
+      inheritedAuthDir,
       workspaceDir: preserveWorkspaceDirOnRefresh
         ? defaultWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId),

@@ -46,7 +46,9 @@ vi.mock("./agent-model-discovery.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => mocks.configuredAgentIds,
   resolveAgentDir: (_config: unknown, agentId: string) =>
-    agentId === "default" ? "/tmp/unused-agent" : `/tmp/configured-${agentId}`,
+    agentId === "default" || agentId === "main"
+      ? "/tmp/unused-agent"
+      : `/tmp/configured-${agentId}`,
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`,
   resolveDefaultAgentDir: () => "/tmp/unused-agent",

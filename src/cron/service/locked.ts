@@ -1,3 +1,4 @@
+import { cronStoreKey } from "../store/key.js";
 /** Process-local cron operation serialization by store path. */
 import type { CronServiceState } from "./state.js";
 
@@ -11,7 +12,7 @@ const resolveChain = (promise: Promise<unknown>) =>
 
 /** Serializes cron operations per store path while preserving state-local operation ordering. */
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
-  const storePath = state.deps.storePath;
+  const storePath = cronStoreKey(state.deps.storePath);
   const storeOp = storeLocks.get(storePath) ?? Promise.resolve();
   const next = Promise.all([resolveChain(state.op), resolveChain(storeOp)]).then(fn);
 
@@ -26,7 +27,7 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
 
 /** Acquires the per-store operation chain until the caller explicitly releases it. */
 export async function acquireCronOperationLock(state: CronServiceState): Promise<() => void> {
-  const storePath = state.deps.storePath;
+  const storePath = cronStoreKey(state.deps.storePath);
   const storeOp = storeLocks.get(storePath) ?? Promise.resolve();
   let release = () => {};
   const held = new Promise<void>((resolve) => {

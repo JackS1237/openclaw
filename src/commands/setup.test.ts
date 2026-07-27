@@ -194,6 +194,39 @@ describe("setupCommand", () => {
     });
   });
 
+  it("writes an interactively selected fleet agent workspace without moving inherited peers", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const fleetWorkspace = path.join(home, "fleet-workspaces");
+      const opsWorkspace = path.join(home, "ops-workspace");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace: fleetWorkspace },
+            entries: { ops: {}, research: {} },
+          },
+          gateway: { mode: "local" },
+        }),
+      );
+      const deps = {
+        ...createSetupDeps(home),
+        agentSelection: { interactive: true, selectAgent: vi.fn(async () => "ops") },
+      };
+
+      await setupCommand({ workspace: opsWorkspace }, runtime, deps);
+
+      const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(config.agents?.defaults?.workspace).toBe(fleetWorkspace);
+      expect(config.agents?.entries?.ops?.workspace).toBe(opsWorkspace);
+      expect(config.agents?.entries?.research?.workspace).toBeUndefined();
+    });
+  });
+
   it("rejects an explicit workspace write to an include-owned fleet entry", async () => {
     await withTempHome(async (home) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -216,6 +249,34 @@ describe("setupCommand", () => {
           runtime,
           createSetupDeps(home),
         ),
+      ).rejects.toThrow(
+        "Cannot set agents.entries.ops.workspace because the agent roster is $include-owned",
+      );
+    });
+  });
+
+  it("rejects an interactive workspace write to an include-owned fleet entry", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const includePath = path.join(configDir, "agents.json");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ $include: "./agents.json" }));
+      await fs.writeFile(
+        includePath,
+        JSON.stringify({
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          gateway: { mode: "local" },
+        }),
+      );
+      const deps = {
+        ...createSetupDeps(home),
+        agentSelection: { interactive: true, selectAgent: vi.fn(async () => "ops") },
+      };
+
+      await expect(
+        setupCommand({ workspace: path.join(home, "ops-workspace") }, runtime, deps),
       ).rejects.toThrow(
         "Cannot set agents.entries.ops.workspace because the agent roster is $include-owned",
       );

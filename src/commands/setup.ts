@@ -10,6 +10,7 @@ import {
   resolveAgentEntry,
   resolveAgentWorkspaceDir,
   toAgentEntriesRecord,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -24,7 +25,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveCliAgentId } from "./agent-selection.js";
+import { resolveCliAgentId, type CliAgentSelectionDeps } from "./agent-selection.js";
 
 type ConfigIO = {
   configPath: string;
@@ -45,6 +46,7 @@ type EnsureAgentWorkspace = (params: {
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
+  agentSelection?: CliAgentSelectionDeps;
   createConfigIO?: () => ConfigIO;
   defaultAgentWorkspaceDir?: string | (() => string | Promise<string>);
   ensureAgentWorkspace?: EnsureAgentWorkspace;
@@ -171,6 +173,7 @@ export async function setupCommand(
     runtime,
     agentInput: opts?.agent,
     surface: "setup workspace selection",
+    deps: deps.agentSelection,
   });
   const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
@@ -182,10 +185,12 @@ export async function setupCommand(
     : undefined;
   const requestsWorkspaceChange =
     desiredWorkspace !== undefined && configuredWorkspace !== desiredWorkspace;
-  const explicitAgentWorkspaceOverride =
-    snapshot.exists && requestsWorkspaceChange && Boolean(opts?.agent?.trim());
+  const selectedAgentWorkspaceOverride =
+    snapshot.exists &&
+    requestsWorkspaceChange &&
+    (Boolean(opts?.agent?.trim()) || tryResolveSoleAgentId(resolvedConfig) === undefined);
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
-  if (explicitAgentWorkspaceOverride && includeOwnsRoster) {
+  if (selectedAgentWorkspaceOverride && includeOwnsRoster) {
     throw new Error(
       `Cannot set agents.entries.${setupAgentId}.workspace because the agent roster is $include-owned. Edit the included agent entry directly, then rerun setup.`,
     );
@@ -202,7 +207,7 @@ export async function setupCommand(
     shouldWriteWorkspace &&
     !defaultEntryWorkspace &&
     includeOwnsRoster &&
-    !explicitAgentWorkspaceOverride;
+    !selectedAgentWorkspaceOverride;
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -236,7 +241,7 @@ export async function setupCommand(
         ...next,
         agents: {
           ...agents,
-          ...(explicitAgentWorkspaceOverride
+          ...(selectedAgentWorkspaceOverride
             ? {}
             : { defaults: { ...agents.defaults, workspace } }),
           ...(entries ? { entries } : {}),
@@ -285,7 +290,7 @@ export async function setupCommand(
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
         updates.push(
-          explicitAgentWorkspaceOverride
+          selectedAgentWorkspaceOverride
             ? `set agents.entries.${setupAgentId}.workspace`
             : "set agents.defaults.workspace",
         );
