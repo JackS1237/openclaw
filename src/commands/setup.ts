@@ -174,8 +174,12 @@ export async function setupCommand(
   });
   const defaultEntry = resolveAgentEntry(resolvedConfig, setupAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
-  const configuredWorkspace =
-    defaultEntryWorkspace || resolveAgentWorkspaceDir(resolvedConfig, setupAgentId);
+  const hasConfiguredWorkspace = Boolean(
+    defaultEntryWorkspace || resolvedDefaults.workspace?.trim(),
+  );
+  const configuredWorkspace = hasConfiguredWorkspace
+    ? resolveAgentWorkspaceDir(resolvedConfig, setupAgentId)
+    : undefined;
 
   const workspace =
     desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));

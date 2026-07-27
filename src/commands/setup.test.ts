@@ -118,6 +118,49 @@ describe("setupCommand", () => {
     });
   });
 
+  it("uses the injected default workspace when the selected agent has no configured workspace", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const workspace = path.join(home, "injected-workspace");
+      const deps = { ...createSetupDeps(home), defaultAgentWorkspaceDir: workspace };
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(workspace);
+    });
+  });
+
+  it("derives a selected fleet agent workspace from configured defaults", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const fleetWorkspace = path.join(home, "fleet-workspaces");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace: fleetWorkspace },
+            entries: { ops: {}, research: {} },
+          },
+          gateway: { mode: "local" },
+        }),
+      );
+      const deps = {
+        ...createSetupDeps(home),
+        defaultAgentWorkspaceDir: path.join(home, "injected-workspace"),
+      };
+
+      await setupCommand({ agent: "ops" }, runtime, deps);
+
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(
+        path.join(fleetWorkspace, "ops"),
+      );
+    });
+  });
+
   it("updates the default entry workspace created by fresh setup", async () => {
     await withTempHome(async (home) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

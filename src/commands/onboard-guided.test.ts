@@ -22,6 +22,9 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
+const ensureOnboardingAgent = vi.hoisted(() =>
+  vi.fn(async ({ config }: AgentParams) => ({ config, agentId: "main" })),
+);
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
@@ -51,7 +54,7 @@ const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-")
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
 vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({ config }: AgentParams) => ({ config, agentId: "main" }),
+  ensureOnboardingAgent,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -183,6 +186,11 @@ describe("runGuidedOnboarding", () => {
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped.mockReset();
     ensureAuthProfileStore.mockClear();
+    ensureOnboardingAgent.mockReset();
+    ensureOnboardingAgent.mockImplementation(async ({ config }: AgentParams) => ({
+      config,
+      agentId: "main",
+    }));
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -911,6 +919,47 @@ describe("runGuidedOnboarding", () => {
     });
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(runSystemAgentChat).not.toHaveBeenCalled();
+  });
+
+  it("applies setup to the selected existing agent workspace", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/tmp/fleet" },
+        entries: {
+          main: { workspace: "/tmp/main" },
+          ops: { workspace: "/tmp/ops" },
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config,
+    });
+    ensureOnboardingAgent.mockResolvedValue({
+      config,
+      agentId: "ops",
+      bootstrapPending: false,
+    });
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({ prompter });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, agent: "ops" }, runtime, deps);
+
+    expect(deps.applySetup).toHaveBeenCalledWith({
+      workspace: "/tmp/ops",
+      targetAgentId: "ops",
+      surface: "cli",
+      runtime,
+    });
+    expect(deps.runAppRecommendations).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/ops" }),
+    );
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/ops");
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
