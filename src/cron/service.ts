@@ -108,10 +108,7 @@ export class CronService implements CronServiceContract {
   }
 
   async beginLegacyDefaultAgentOwnerHandoff(legacyDefaultAgentId: string) {
-    return await lifecycleOps.beginLegacyDefaultAgentOwnerHandoff(
-      this.state,
-      legacyDefaultAgentId,
-    );
+    return await lifecycleOps.beginLegacyDefaultAgentOwnerHandoff(this.state, legacyDefaultAgentId);
   }
 
   async refreshLegacyDefaultAgentOwnerHandoff(options?: { persistSchedulingState?: boolean }) {
