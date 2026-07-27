@@ -37,7 +37,6 @@ import {
 } from "./legacy.default-agent-roles.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -162,10 +161,8 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   legacyDefaultAgentId: string,
   env?: NodeJS.ProcessEnv,
 ): LegacyDefaultAgentRoleMaterialization {
-  const activationSourceConfig = applyPluginAutoEnable({ config, env }).config;
   const ambientChannelIds = listChannelIdsForOwnershipMigration({
     config,
-    activationSourceConfig,
     env,
   });
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {

@@ -466,12 +466,12 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
         ? [
             topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
             topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
-            topicNameCacheImportSource({
-              sourceStorePath: legacyStorePath,
-              targetStorePath: defaultAccountStorePath,
-            }),
           ]
         : []),
+      topicNameCacheImportSource({
+        sourceStorePath: legacyStorePath,
+        targetStorePath: defaultAccountStorePath,
+      }),
     ].map((source) => [`${source.sourcePath}\0${source.namespace}`, source] as const),
   );
   return [...sourcesByKey.values()].flatMap((source) => {

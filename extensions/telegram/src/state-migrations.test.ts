@@ -262,7 +262,7 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("detects legacy topic-name cache import for the global sidecar path", async () => {
+  it("detects the account-scoped legacy topic-name import for an ownerless fleet", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const legacyStorePath = path.join(dir, "sessions", "sessions.json");
@@ -285,6 +285,10 @@ describe("telegram state migrations", () => {
       );
 
       const cfg = {
+        agents: {
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
         channels: {
           telegram: {
             accounts: {

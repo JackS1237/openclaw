@@ -688,6 +688,7 @@ describe("default role materialization authored writes", () => {
         baseSnapshot: snapshot,
         explicitSetPaths: [["agents", "entries"]],
         explicitSetValueSource: nextConfig,
+        allowedAgentRosterRemovals: ["ops"],
       });
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
