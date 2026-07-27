@@ -1090,6 +1090,117 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("keeps an old-gateway compatibility default implicit for a global sentinel", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("global");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("scopes an old-gateway global sentinel when --agent is explicit", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionKey).toBe("agent:ops:global");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
+  it("keeps an omitted old-gateway global session unscoped", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          mainKey: "remote-main",
+          scope: "global",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
   it("keeps an omitted remote sole-agent global session unscoped", async () => {
     callGateway.mockImplementation(async (requestValue) => {
       const request = requireRecord(requestValue, "gateway request");

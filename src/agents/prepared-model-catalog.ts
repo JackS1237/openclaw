@@ -7,6 +7,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -69,7 +70,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     agentDir,
     config,
     ...(params.env ? { env: params.env } : {}),
-    inheritedAuthDir: resolveAgentDir(config, "main", params.env),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config, params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;

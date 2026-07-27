@@ -57,6 +57,15 @@ vi.mock("./agent-scope.js", () => ({
     mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
 }));
 
+vi.mock("./agent-scope-config.js", () => ({
+  tryResolveSoleAgentId: () =>
+    mocks.configuredAgentIds.length === 1 ? mocks.configuredAgentIds[0] : undefined,
+}));
+
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/tmp/unused-agent",
+}));
+
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,

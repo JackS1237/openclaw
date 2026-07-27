@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -171,9 +172,16 @@ async function activateSetupInferenceUnredacted(
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
       const applyModelSelection =
         deps.applySystemAgentModelSelection ?? applySystemAgentModelSelection;
+      const targetAgentId =
+        plan.routeAgentId &&
+        plan.config.agents?.ownership === "explicit" &&
+        listAgentEntries(plan.config).length > 1
+          ? plan.routeAgentId
+          : undefined;
       const stagedConfig = await applyModelSelection({
         config: plan.config,
         model: plan.persistModelRef,
+        ...(targetAgentId ? { targetAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       });

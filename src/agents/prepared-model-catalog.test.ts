@@ -25,6 +25,11 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
 }));
 
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () =>
+    mocks.agentDirs.get("main") ?? "/tmp/prepared-model-catalog-agent",
+}));
+
 vi.mock("./prepared-model-runtime.js", () => {
   class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
   return {

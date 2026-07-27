@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { resolveAgentDir, resolveDefaultAgentDir } from "../agent-scope.js";
+import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -91,7 +92,7 @@ function resolvePreparedAgentSnapshot(
     ...(agentId ? { agentId } : {}),
     agentDir: resolvedAgentDir,
     config: cfg ?? {},
-    inheritedAuthDir: resolveAgentDir(cfg ?? {}, "main"),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
   };
   const published = getPreparedModelRuntimeSnapshot({
     ...base,
@@ -212,7 +213,7 @@ export async function resolveModelAsync(
           ...(options?.agentId ? { agentId: options.agentId } : {}),
           agentDir: resolvedAgentDir,
           config: cfg ?? {},
-          inheritedAuthDir: resolveAgentDir(cfg ?? {}, "main"),
+          inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
           ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
         })
       : undefined);

@@ -1262,7 +1262,20 @@ describe("activateSetupInference", () => {
           runtimeConfig: initialConfig,
         })) as never,
         applySystemAgentModelSelection: async (params) => {
-          const staged = await applySystemAgentModelSelection(params);
+          expect(params.targetAgentId).toBe("ops");
+          const staged = await applySystemAgentModelSelection({
+            ...params,
+            config: {
+              ...params.config,
+              agents: {
+                ...params.config.agents,
+                defaults: {
+                  ...params.config.agents?.defaults,
+                  systemAgent: { agentId: "research" },
+                },
+              },
+            },
+          });
           const defaults = { ...staged.agents?.defaults };
           delete defaults.systemAgent;
           return { ...staged, agents: { ...staged.agents, defaults } };

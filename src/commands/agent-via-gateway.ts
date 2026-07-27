@@ -123,6 +123,10 @@ type AgentGatewayCallIdentity = Pick<
 type AgentSessionModule = typeof import("./agent/session.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
+function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
+  return !roster.ownership && !roster.selectionRequired && roster.agentIds.length > 1;
+}
+
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
@@ -527,12 +531,16 @@ async function normalizeSessionKeyOptsForDispatch(
       ? remoteGatewayRoster.ownership === "sole" ||
         (!remoteGatewayRoster.ownership && remoteGatewayRoster.agentIds.length === 1)
       : tryResolveSoleAgentId(cfg) === selectedAgentId;
+    const implicitCompatibilityDefault = Boolean(
+      remoteGatewayRoster && usesImplicitRemoteCompatibilityDefault(remoteGatewayRoster),
+    );
     const implicitRemoteGlobalSession =
       !explicitAgentIdRaw && remoteGatewayRoster?.scope === "global" && rawSessionKey === undefined;
     const unscopedSession =
       isUnscopedSessionKeySentinel(rawSessionKey) || implicitRemoteGlobalSession;
-    agentIdRaw = implicitSoleAgent && unscopedSession ? undefined : selectedAgentId;
-    if (!implicitSoleAgent || !unscopedSession) {
+    const implicitAgentSelection = implicitSoleAgent || implicitCompatibilityDefault;
+    agentIdRaw = implicitAgentSelection && unscopedSession ? undefined : selectedAgentId;
+    if (!implicitAgentSelection || !unscopedSession) {
       normalizedOpts = { ...normalizedOpts, agent: selectedAgentId };
     }
   }
@@ -821,10 +829,13 @@ async function agentViaGatewayCommand(
   const remoteRosterIsSole =
     opts.remoteGatewayRoster?.ownership === "sole" ||
     (!opts.remoteGatewayRoster?.ownership && opts.remoteGatewayRoster?.agentIds.length === 1);
+  const remoteRosterUsesCompatibilityDefault = Boolean(
+    opts.remoteGatewayRoster && usesImplicitRemoteCompatibilityDefault(opts.remoteGatewayRoster),
+  );
   const hasImplicitRemoteGlobalTarget =
     opts.remoteGatewayRoster?.scope === "global" &&
     !opts.remoteGatewayRoster.selectionRequired &&
-    remoteRosterIsSole;
+    (remoteRosterIsSole || remoteRosterUsesCompatibilityDefault);
   if (
     !opts.to &&
     !opts.sessionId &&
@@ -881,20 +892,28 @@ async function agentViaGatewayCommand(
   );
   const deferServerSessionResolution =
     deferUnavailableRemoteContractSession || deferRemoteSessionId;
+  // Old gateways own unscoped sentinel routing. A local multi-agent resolver
+  // would either reject the compatibility default or scope the wrong transcript.
+  const preserveImplicitCompatibilitySession = Boolean(
+    remoteRosterUsesCompatibilityDefault &&
+    !agentId &&
+    (isUnscopedSessionKeySentinel(explicitSessionKey) || hasImplicitRemoteGlobalTarget),
+  );
 
-  const sessionKey = preserveUnavailableRemoteLegacyKey
-    ? explicitSessionKey
-    : deferExplicitRecipientSession || deferServerSessionResolution
-      ? undefined
-      : classifySessionKeyShape(explicitSessionKey) === "agent"
-        ? explicitSessionKey
-        : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
-            cfg,
-            agentId,
-            to: opts.to,
-            sessionId: opts.sessionId,
-            sessionKey: explicitSessionKey,
-          }).sessionKey;
+  const sessionKey =
+    preserveUnavailableRemoteLegacyKey || preserveImplicitCompatibilitySession
+      ? explicitSessionKey
+      : deferExplicitRecipientSession || deferServerSessionResolution
+        ? undefined
+        : classifySessionKeyShape(explicitSessionKey) === "agent"
+          ? explicitSessionKey
+          : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+              cfg,
+              agentId,
+              to: opts.to,
+              sessionId: opts.sessionId,
+              sessionKey: explicitSessionKey,
+            }).sessionKey;
   const abortSessionKey = deferServerSessionResolution
     ? undefined
     : deferExplicitRecipientSession
