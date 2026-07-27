@@ -36,7 +36,6 @@ import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
-  DEFAULT_MAIN_KEY,
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -507,11 +506,10 @@ async function normalizeSessionKeyOptsForDispatch(
         ? await loadRuntimeConfig()
         : (selectionCfg ?? readGatewayDispatchConfig())
       : undefined;
-  const deferUnavailableRemoteMainAlias = Boolean(
-    normalizedOpts.remoteGatewayContractUnavailable &&
-    rawSessionKey?.toLowerCase() === DEFAULT_MAIN_KEY,
+  const preserveUnavailableRemoteLegacyKey = Boolean(
+    normalizedOpts.remoteGatewayContractUnavailable && isLegacySessionKey,
   );
-  const sessionKey = deferUnavailableRemoteMainAlias
+  const sessionKey = preserveUnavailableRemoteLegacyKey
     ? normalizedOpts.sessionKey
     : scopeLegacySessionKeyToAgent({
         agentId: agentIdRaw,
@@ -818,14 +816,15 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
-  const preserveUnavailableRemoteMainAlias = Boolean(
-    opts.remoteGatewayContractUnavailable && explicitSessionKey?.toLowerCase() === DEFAULT_MAIN_KEY,
+  const preserveUnavailableRemoteLegacyKey = Boolean(
+    opts.remoteGatewayContractUnavailable &&
+    classifySessionKeyShape(explicitSessionKey) === "legacy_or_alias",
   );
   const deferUnavailableRemoteContractSession = Boolean(
     opts.remoteGatewayContractUnavailable && !explicitSessionKey,
   );
 
-  const sessionKey = preserveUnavailableRemoteMainAlias
+  const sessionKey = preserveUnavailableRemoteLegacyKey
     ? explicitSessionKey
     : deferExplicitRecipientSession || deferUnavailableRemoteContractSession
       ? undefined

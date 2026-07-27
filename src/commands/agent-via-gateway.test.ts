@@ -1037,6 +1037,40 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("forwards a bare remote alias for authoritative server canonicalization", async () => {
+    let serverCanonicalSessionKey: string | undefined;
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        throw new Error("remote roster unavailable");
+      }
+      const params = requireRecord(request.params, "agent params");
+      expect(params.sessionKey).toBe("remote-main");
+      serverCanonicalSessionKey = "agent:ops:remote-main";
+      const onAccepted = request.onAccepted as
+        | ((payload: { runId: string; sessionKey: string }) => void)
+        | undefined;
+      onAccepted?.({ runId: "remote-run", sessionKey: serverCanonicalSessionKey });
+      return {
+        runId: "remote-run",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "remote-main" }, runtime);
+        expect(serverCanonicalSessionKey).toBe("agent:ops:remote-main");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        session: { mainKey: "local-main" },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
   it("forwards an explicit session id for remote resolution after contract failure", async () => {
     callGateway
       .mockRejectedValueOnce(new Error("remote roster unavailable"))
