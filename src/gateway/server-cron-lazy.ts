@@ -248,6 +248,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       const loadedBlockers = loaded?.state.cron.getSuspensionBlockerCount?.() ?? 0;
       return loaded?.phase === "starting" ? Math.max(1, loadedBlockers) : loadedBlockers;
     },
+    async reloadForConfigAdoption() {
+      await (await load()).state.cron.reloadForConfigAdoption();
+    },
     async status() {
       return await (await load()).state.cron.status();
     },

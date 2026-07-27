@@ -45,6 +45,18 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 
+function reloadPlanChangesAgentResolution(plan: GatewayReloadPlan): boolean {
+  return plan.changedPaths.some(
+    (changedPath) =>
+      changedPath === "agents" ||
+      changedPath === "agents.ownership" ||
+      changedPath === "agents.entries" ||
+      changedPath.startsWith("agents.entries.") ||
+      changedPath === "agents.list" ||
+      changedPath.startsWith("agents.list."),
+  );
+}
+
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const myGeneration = nextGatewayReloadGeneration();
   const restartRecoveryAvailable =
@@ -96,6 +108,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
+
+    // A CLI may have migrated SQLite in another process. Replace the live
+    // scheduler snapshot before commitRuntime publishes the new agent roster.
+    if (reloadPlanChangesAgentResolution(plan)) {
+      await state.cronState.cron.reloadForConfigAdoption();
+      if (!isTransactionCurrent()) {
+        throw new GatewayHotReloadCancelledError();
+      }
+    }
 
     resetPreparedModelRuntimeStateForHotReload();
 

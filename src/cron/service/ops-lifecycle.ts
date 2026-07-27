@@ -12,6 +12,7 @@ import {
 } from "./jobs.js";
 import { acquireCronOperationLock, locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
+import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import {
   type InterruptedStartupRun,
@@ -118,6 +119,20 @@ export async function refreshLegacyDefaultAgentOwnerHandoff(
     await persist(state, { stateOnly: true });
   }
   armTimer(state);
+}
+
+/** Replaces stale in-memory rows before a Gateway publishes new agent resolution. */
+export async function reloadForConfigAdoption(state: CronServiceState) {
+  const release = await acquireCronOperationLock(state);
+  try {
+    const legacyDefaultAgentId = resolveCurrentDefaultAgentId(state);
+    if (legacyDefaultAgentId) {
+      await materializeLoadedLegacyDefaultAgentOwners(state, legacyDefaultAgentId);
+    }
+    await refreshLegacyDefaultAgentOwnerHandoff(state);
+  } finally {
+    release();
+  }
 }
 
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */

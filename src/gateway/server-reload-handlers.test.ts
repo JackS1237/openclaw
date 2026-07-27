@@ -521,7 +521,11 @@ function createReloadHandlersForTest(
     getChannelAutostartSuppression?: ReloadHandlerParams["getChannelAutostartSuppression"];
   },
 ) {
-  const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+  const cron = {
+    start: vi.fn(async () => {}),
+    stop: vi.fn(),
+    reloadForConfigAdoption: vi.fn(async () => {}),
+  };
   const stopExitWatchers = vi.fn();
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -961,6 +965,23 @@ describe("managed reload transaction ownership", () => {
 });
 
 describe("gateway hot reload model state", () => {
+  it("reloads cron rows before publishing changed agent resolution", async () => {
+    const { applyHotReload, cron, setState } = createReloadHandlersForTest();
+    const plan = createHotTailPlan({
+      changedPaths: ["agents"],
+      hotReasons: ["agents"],
+    });
+
+    await applyHotReload(plan, {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    });
+
+    expect(cron.reloadForConfigAdoption).toHaveBeenCalledOnce();
+    expect(cron.reloadForConfigAdoption.mock.invocationCallOrder[0]).toBeLessThan(
+      setState.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {
     const order: string[] = [];
     const newCron = {

@@ -2,7 +2,6 @@ import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { beginLegacyDefaultOwnerHandoff } from "../cron/live-service-registry.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -40,6 +39,7 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { resolveModelIdNormalizationPolicies } from "./io.context.js";
+import { prepareLegacyCronOwnerHandoffs } from "./io.cron-owner-handoff.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
 import {
@@ -249,9 +249,18 @@ export async function writeConfigFileFromContext(
       : previousSoleHandoffAgentId
         ? previousSoleHandoffAgentId
         : undefined;
-  const cronHandoffStorePath = cronHandoffAgentId
-    ? resolveCronJobsStorePathFromConfig(snapshot.config, deps.env)
-    : undefined;
+  const cronHandoffTargets = new Map<string, OpenClawConfig>();
+  if (cronHandoffAgentId) {
+    const sourceCronConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.config;
+    cronHandoffTargets.set(
+      resolveCronJobsStorePathFromConfig(sourceCronConfig, deps.env),
+      sourceCronConfig,
+    );
+    const destinationStorePath = resolveCronJobsStorePathFromConfig(nextConfig, deps.env);
+    if (!cronHandoffTargets.has(destinationStorePath)) {
+      cronHandoffTargets.set(destinationStorePath, nextConfig);
+    }
+  }
   persistCandidate = nextConfig;
   let explicitSetValueSource: unknown = options.explicitSetValueSource ?? nextConfig;
   for (const ownershipPath of topologyOwnershipPaths) {
@@ -561,35 +570,15 @@ export async function writeConfigFileFromContext(
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(stampedOutputConfig);
   await preCommitRuntimePreflight(sourceConfigForPreflight);
 
-  let liveCronHandoff: ReturnType<typeof beginLegacyDefaultOwnerHandoff> | undefined;
+  let releaseCronHandoffs: (() => void) | undefined;
   try {
-    if (cronHandoffAgentId && cronHandoffStorePath) {
-      liveCronHandoff = beginLegacyDefaultOwnerHandoff({
-        storePath: cronHandoffStorePath,
-        legacyDefaultAgentId: cronHandoffAgentId,
-      });
-      const liveCronOwnerMigration = await liveCronHandoff.drainAndSeal();
-      if (liveCronOwnerMigration.warnings.length > 0) {
-        throw new Error(
-          `Config write refused before live cron ownership was durable: ${liveCronOwnerMigration.warnings.join(" ")}`,
-        );
-      }
-      // The doctor loader merges canonical rows, config projections, and any
-      // unimported legacy JSON before the topology commit retires this owner.
-      const { materializeLegacyDefaultCronJobOwners: materializeMergedCronOwners } =
-        await import("../commands/doctor/cron/legacy-repair.js");
-      const cronOwnerMigration = await materializeMergedCronOwners({
-        cfg: snapshot.config,
-        storePath: cronHandoffStorePath,
+    if (cronHandoffAgentId) {
+      const prepared = await prepareLegacyCronOwnerHandoffs({
         env: deps.env,
         legacyDefaultAgentId: cronHandoffAgentId,
+        targets: [...cronHandoffTargets].map(([storePath, config]) => ({ storePath, config })),
       });
-      if (cronOwnerMigration.warnings.length > 0) {
-        throw new Error(
-          `Config write refused before retired default ownership was durable: ${cronOwnerMigration.warnings.join(" ")}`,
-        );
-      }
-      await liveCronHandoff.refreshSealedServices();
+      releaseCronHandoffs = prepared.release;
     }
     const result = await replaceFileAtomic({
       filePath: configPath,
@@ -724,6 +713,6 @@ export async function writeConfigFileFromContext(
     await appendWriteAudit("failed", error);
     throw error;
   } finally {
-    liveCronHandoff?.release();
+    releaseCronHandoffs?.();
   }
 }

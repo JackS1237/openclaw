@@ -14,6 +14,8 @@ export type GatewayCronServiceContract = CronServiceContract & {
   /** Temporarily disarm ticks without running startup recovery on resume. */
   pauseScheduling(): void;
   resumeScheduling(): void;
+  /** Reload durable rows before publishing a config with new agent resolution. */
+  reloadForConfigAdoption(): Promise<void>;
   /** Scheduler-owned work not represented by active cron run markers. */
   getSuspensionBlockerCount?(): number;
   /** Stop cron and await scheduler-owned child process teardown. */

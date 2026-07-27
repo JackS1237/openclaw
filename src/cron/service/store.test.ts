@@ -7,6 +7,7 @@ import * as cronStoreModule from "../store.js";
 import { CronStoreEpochMismatchError, loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
+import { reloadForConfigAdoption } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
@@ -189,6 +190,33 @@ describe("cron service store seam coverage", () => {
     );
     expect((await loadCronStore(storePath)).jobs).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "stale-only" })]),
+    );
+  });
+
+  it("reloads externally migrated rows before config adoption", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "external-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    await ensureLoaded(state, { skipRecompute: true });
+    expect(state.store?.jobs[0]?.agentId).toBeUndefined();
+
+    await materializeLegacyDefaultCronJobOwners({
+      storePath,
+      legacyDefaultAgentId: "ops",
+    });
+    const migrated = await loadCronStore(storePath);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [...migrated.jobs, createReloadCronJob({ id: "late-ownerless" })],
+    });
+    await reloadForConfigAdoption(state);
+
+    expect(state.store?.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "external-owner", agentId: "ops" }),
+        expect.objectContaining({ id: "late-ownerless", agentId: "ops" }),
+      ]),
     );
   });
 

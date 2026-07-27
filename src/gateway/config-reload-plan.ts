@@ -154,6 +154,12 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "discovery", kind: "restart" },
 ];
 
+const WHOLE_AGENTS_RELOAD_RULE: ReloadRule = {
+  prefix: "agents",
+  kind: "hot",
+  actions: ["restart-heartbeat"],
+};
+
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
@@ -255,6 +261,9 @@ function listReloadRules(): ReloadRule[] {
 }
 
 function matchRule(path: string): ReloadRule | null {
+  if (path === "agents") {
+    return WHOLE_AGENTS_RELOAD_RULE;
+  }
   for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
       return rule;

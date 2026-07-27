@@ -337,6 +337,10 @@ describe("buildGatewayReloadPlan", () => {
       expected: { restartHeartbeat: true },
     },
     {
+      path: "agents",
+      expected: { restartHeartbeat: true },
+    },
+    {
       path: "agents.defaults.models",
       expected: { restartHeartbeat: true },
     },

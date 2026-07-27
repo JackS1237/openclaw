@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../config/io.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { CronService } from "../../../cron/service.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -799,6 +800,88 @@ describe("default role materialization authored writes", () => {
         cron.stop();
         secondCron.stop();
       }
+    });
+  });
+
+  it("migrates source and destination cron stores during a combined fleet write", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dual-cron-store-owner-"));
+    roots.push(root);
+    const configPath = path.join(root, "openclaw.json");
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state-root"),
+      OPENCLAW_TEST_FAST: "1",
+    } as NodeJS.ProcessEnv;
+    const sourceStorePath = path.join(root, "cron", "source.json");
+    const destinationStorePath = path.join(root, "cron", "destination.json");
+    const ownerlessJob = (id: string): CronJob => ({
+      id,
+      name: id,
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: id },
+      state: {},
+    });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({
+        agents: { entries: { ops: {} } },
+        cron: { store: sourceStorePath },
+      })}\n`,
+      "utf-8",
+    );
+    await saveCronJobsStore(
+      sourceStorePath,
+      { version: 1, jobs: [ownerlessJob("source-ownerless")] },
+      { env },
+    );
+    await saveCronJobsStore(
+      destinationStorePath,
+      { version: 1, jobs: [ownerlessJob("destination-ownerless")] },
+      { env },
+    );
+
+    const io = createConfigIO({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+      preservedLegacyRootKeys: ["cron"],
+      logger: { warn: () => {}, error: () => {} },
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    const nextConfig = {
+      ...snapshot.config,
+      agents: {
+        ...snapshot.config.agents,
+        entries: { ...snapshot.config.agents?.entries, research: {} },
+      },
+      cron: { ...(snapshot.config.cron as object), store: destinationStorePath },
+    } as OpenClawConfig;
+
+    await io.writeConfigFile(nextConfig, {
+      baseSnapshot: snapshot,
+      explicitSetPaths: [["agents", "entries"], ["cron"]],
+      explicitSetValueSource: nextConfig,
+      preservedLegacyRootKeys: ["cron"],
+    });
+
+    const owners = Object.fromEntries(
+      await Promise.all(
+        [sourceStorePath, destinationStorePath].map(async (storePath) => {
+          const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
+          const job = loaded.store.jobs[0];
+          return [job?.id, job?.agentId];
+        }),
+      ),
+    );
+    expect(owners).toEqual({
+      "source-ownerless": "ops",
+      "destination-ownerless": "ops",
     });
   });
 });
