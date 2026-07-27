@@ -9,7 +9,6 @@ import {
 } from "../../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawConfig } from "../config.js";
-import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import { resolveStorePath } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -19,7 +18,6 @@ import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
   resolveExistingAgentSessionStoreTargetsSync,
-  resolveSessionStoreCompatibilityAgentId,
   resolveSessionStoreTargets,
 } from "./targets.js";
 
@@ -90,19 +88,6 @@ function expectTargetsToContainStores(
 }
 
 describe("resolveSessionStoreTargets", () => {
-  it("does not derive the fixed-store compatibility anchor from roster shape", () => {
-    expect(
-      resolveSessionStoreCompatibilityAgentId({
-        agents: { entries: { ops: {}, main: {} } },
-      }),
-    ).toBe("main");
-    expect(
-      resolveSessionStoreCompatibilityAgentId({
-        agents: { entries: { ops: {} } },
-      }),
-    ).toBe("main");
-  });
-
   it("resolves all configured agent stores", async () => {
     await withTempHome(async () => {
       const cfg: OpenClawConfig = {
@@ -188,27 +173,6 @@ describe("resolveSessionStoreTargets", () => {
       { agentId: "main", storePath: path.resolve("/tmp/shared-sessions.json") },
       { agentId: "work", storePath: path.resolve("/tmp/shared-sessions.json") },
     ]);
-  });
-
-  it("keeps a colliding fixed-store target on the retained legacy owner", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const storePath = path.join(home, "ops.json");
-      const diagnostics: string[] = [];
-      const cfg = retainLegacyDefaultAgentId(
-        {
-          session: { store: storePath },
-          agents: { entries: { main: {}, ops: {} } },
-        },
-        "ops",
-      );
-
-      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
-        { agentId: "main", storePath },
-        { agentId: "ops", storePath },
-      ]);
-      expect(diagnostics).toContainEqual(expect.stringContaining('suffixed owner(s): "main"'));
-    });
   });
 
   it("lands colliding fixed-store writes in distinct owner databases", async () => {
