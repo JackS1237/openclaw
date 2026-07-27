@@ -88,6 +88,7 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
+  addCandidate(candidates, resolveAgentDir(cfg, "main", env));
   const soleAgentId = tryResolveSoleAgentId(cfg);
   if (soleAgentId) {
     addCandidate(candidates, resolveAgentDir(cfg, soleAgentId, env));

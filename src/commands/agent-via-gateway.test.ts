@@ -1039,6 +1039,19 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("dispatches a plain sole-agent invocation through the local gateway", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.method).toBe("agent");
+      expect(requireRecord(request.params, "agent params").agentId).toBe("main");
+    });
+  });
+
   it("keeps a remote sole-agent global sentinel unscoped", async () => {
     callGateway.mockImplementation(async (requestValue) => {
       const request = requireRecord(requestValue, "gateway request");

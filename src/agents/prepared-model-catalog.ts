@@ -69,7 +69,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
     agentDir,
     config,
     ...(params.env ? { env: params.env } : {}),
-    inheritedAuthDir: agentDir,
+    inheritedAuthDir: resolveAgentDir(config, "main", params.env),
     ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
   };
   const exact = params.readOnly ? { ...full, readOnly: true } : full;

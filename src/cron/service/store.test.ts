@@ -270,6 +270,26 @@ describe("cron service store seam coverage", () => {
     });
   });
 
+  it("prefers and retires the retained legacy owner during lazy config adoption", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "lazy-retained-owner" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "research";
+    state.deps.resolveDefaultAgentId = () => "research";
+    state.deps.legacyDefaultAgentId = "ops";
+    state.deps.cronEnabled = false;
+    expect(state.store).toBeNull();
+
+    await reloadForConfigAdoption(state);
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "lazy-retained-owner", agentId: "ops" });
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      id: "lazy-retained-owner",
+      agentId: "ops",
+    });
+    expect(state.deps.legacyDefaultAgentId).toBeUndefined();
+  });
+
   it("aborts config adoption when legacy-owner materialization cannot persist", async () => {
     const { storePath } = await makeStorePath();
     await writeSingleJobStore(storePath, createReloadCronJob({ id: "ownerless-warning" }));

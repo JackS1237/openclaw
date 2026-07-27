@@ -532,7 +532,7 @@ async function normalizeSessionKeyOptsForDispatch(
     const unscopedSession =
       isUnscopedSessionKeySentinel(rawSessionKey) || implicitRemoteGlobalSession;
     agentIdRaw = implicitSoleAgent && unscopedSession ? undefined : selectedAgentId;
-    if (!implicitSoleAgent || (remoteGatewayRoster && !unscopedSession)) {
+    if (!implicitSoleAgent || !unscopedSession) {
       normalizedOpts = { ...normalizedOpts, agent: selectedAgentId };
     }
   }

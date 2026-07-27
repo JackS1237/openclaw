@@ -110,7 +110,8 @@ export async function reloadForConfigAdoption(state: CronServiceState) {
   const release = await acquireCronOperationLock(state);
   try {
     await ensureLoaded(state, { skipRecompute: true });
-    const legacyDefaultAgentId = resolveCurrentDefaultAgentId(state);
+    const legacyDefaultAgentId =
+      state.deps.legacyDefaultAgentId ?? resolveCurrentDefaultAgentId(state);
     if (legacyDefaultAgentId) {
       const migration = await materializeLoadedLegacyDefaultAgentOwners(
         state,
@@ -121,6 +122,8 @@ export async function reloadForConfigAdoption(state: CronServiceState) {
       }
     }
     await refreshLegacyDefaultAgentOwnerHandoff(state);
+    // The config adoption that retires legacy ownership has now committed to the store.
+    state.deps.legacyDefaultAgentId = undefined;
   } finally {
     release();
   }

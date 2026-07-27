@@ -1309,7 +1309,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
 });
 
 describe("maybeRepairLegacyFlatAuthProfileStores", () => {
-  it("migrates legacy flat auth-profiles.json stores with a backup", async () => {
+  it("migrates the main auth store for an explicit fleet without a main entry", async () => {
     const state = await makeTestState();
     const legacy = {
       "ollama-windows": {
@@ -1320,9 +1320,12 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     const authPath = await writeLegacyAuthProfilesJson(state, legacy);
 
     const result = await maybeRepairLegacyFlatAuthProfileStores({
-      cfg: {},
+      cfg: {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      },
       prompter: makePrompter(true),
       now: () => 123,
+      env: state.env,
     });
 
     expect(result.detected).toEqual([authPath]);
