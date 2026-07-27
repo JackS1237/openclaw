@@ -9,7 +9,15 @@ import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { readCronStoreEpoch } from "./row-codec.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
+import type { CronJob } from "../types.js";
+import {
+  loadedCronStoreFromRows,
+  loadCronRows,
+  materializeCronRowAgentOwners,
+  readCronStoreEpoch,
+  replaceCronRows,
+} from "./row-codec.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +44,74 @@ const concurrentWriterSource = `
 `;
 
 describe("cron store epoch", () => {
+  it("bumps the epoch when a job_json-only config field is removed", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-sidecar-"));
+    const handle = openOpenClawStateDatabase({ path: path.join(root, "state.sqlite") });
+    const database = handle.db;
+    const storeKey = "job-json-topology";
+    const job = makeCronJob({ id: "job-json" });
+    const extendedJob = { ...job, additiveConfig: { mode: "future" } } as CronJob;
+    try {
+      expect(
+        replaceCronRows(
+          database,
+          storeKey,
+          { version: 1, jobs: [extendedJob] },
+          {
+            bumpStoreEpoch: true,
+          },
+        ),
+      ).toBe(1);
+      expect(
+        replaceCronRows(
+          database,
+          storeKey,
+          { version: 1, jobs: [job] },
+          {
+            bumpStoreEpoch: true,
+          },
+        ),
+      ).toBe(2);
+    } finally {
+      handle.walMaintenance.close();
+      database.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an explicit null owner through load and legacy-owner adoption", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-null-owner-"));
+    const handle = openOpenClawStateDatabase({ path: path.join(root, "state.sqlite") });
+    const database = handle.db;
+    const storeKey = "null-owner";
+    const job = makeCronJob({ id: "null-owner" });
+    try {
+      replaceCronRows(database, storeKey, { version: 1, jobs: [job] });
+      const row = loadCronRows(database, storeKey)[0];
+      if (!row) {
+        throw new Error("missing cron row fixture");
+      }
+      const jobJson = JSON.parse(row.job_json) as Record<string, unknown>;
+      jobJson.agentId = null;
+      database
+        .prepare("UPDATE cron_jobs SET agent_id = NULL, job_json = ? WHERE store_key = ?")
+        .run(JSON.stringify(jobJson), storeKey);
+
+      const loaded = loadedCronStoreFromRows(loadCronRows(database, storeKey)).store.jobs[0];
+      expect(loaded && Object.hasOwn(loaded, "agentId")).toBe(true);
+      expect((loaded as unknown as { agentId: unknown }).agentId).toBeNull();
+      expect(materializeCronRowAgentOwners(database, storeKey, "ops")).toBe(0);
+
+      const unchangedRow = loadCronRows(database, storeKey)[0];
+      expect(unchangedRow?.agent_id).toBeNull();
+      expect(JSON.parse(unchangedRow?.job_json ?? "{}")).toHaveProperty("agentId", null);
+    } finally {
+      handle.walMaintenance.close();
+      database.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("assigns distinct epochs to concurrent row writes from independent processes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-epoch-"));
     const databasePath = path.join(root, "state.sqlite");

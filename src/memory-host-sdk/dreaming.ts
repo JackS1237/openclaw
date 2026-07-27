@@ -12,11 +12,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import {
   listAgentEntries,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 

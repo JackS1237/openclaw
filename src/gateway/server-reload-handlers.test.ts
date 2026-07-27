@@ -937,6 +937,72 @@ async function runManagedOwnershipScenario(params: {
 }
 
 describe("managed reload transaction ownership", () => {
+  it("adopts legacy cron owners before a whole-agents restart", async () => {
+    vi.useFakeTimers();
+    const initialConfig = {} satisfies OpenClawConfig;
+    const nextConfig = {
+      ...initialConfig,
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig;
+    const snapshot = (config: OpenClawConfig): PreparedSecretsRuntimeSnapshot => ({
+      sourceConfig: config,
+      config,
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    });
+    activateSecretsRuntimeSnapshot(snapshot(initialConfig));
+    const events: string[] = [];
+    const cron = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(),
+      reloadForConfigAdoption: vi.fn(async () => {
+        events.push("cron-adoption");
+      }),
+    };
+    const state = { ...createDefaultGatewayReloadState(), cronState: { cron } as never };
+    const writeListenerRef = createConfigWriteListenerRef();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    let acceptRestart: (() => void) | undefined;
+    const accepted = new Promise<void>((resolve) => {
+      acceptRestart = resolve;
+    });
+    const reloader = startManagedGatewayConfigReloader({
+      initialConfig,
+      readSnapshot: vi.fn(async () =>
+        createValidConfigSnapshot(nextConfig, "agents-next"),
+      ) as never,
+      subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+      getState: () => state,
+      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => {
+        events.push("restart-preflight");
+        return snapshot(config);
+      }) as never,
+      acceptTerminalConfig: vi.fn(() => acceptRestart?.()),
+      requestRecoveryRestart,
+    });
+
+    try {
+      writeListenerRef.current?.(
+        createConfigWriteNotification(
+          nextConfig,
+          "agents-next",
+          1,
+          "runtime-agents-next",
+          "source-agents-next",
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await accepted;
+
+      expect(cron.reloadForConfigAdoption).toHaveBeenCalledOnce();
+      expect(events.slice(0, 2)).toEqual(["cron-adoption", "restart-preflight"]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
   it("applies a current in-process hot config", async () => {
     const result = await runManagedOwnershipScenario({ kind: "hot", queueRevert: false });
 

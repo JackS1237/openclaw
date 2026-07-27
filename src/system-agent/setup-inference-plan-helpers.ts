@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import {
@@ -16,6 +16,7 @@ import { GEMINI_CLI_DEFAULT_MODEL_REF } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveSystemAgentTargetAgentId } from "./inference-route.js";
 import {
   type ActivateSetupInferenceDeps,
   type ActivateSetupInferenceParams,
@@ -232,7 +233,7 @@ export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef
           : { exists: false },
       ]),
     );
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(config);
   const agent = listAgentEntries(config).find(
     (entry) => normalizeAgentId(entry.id) === defaultAgentId,
   );
@@ -340,7 +341,7 @@ function copySelectedModelMetadata(params: {
     };
   }
 
-  const defaultAgentId = resolveDefaultAgentId(params.target);
+  const defaultAgentId = resolveSystemAgentTargetAgentId(params.target);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );

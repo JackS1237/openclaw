@@ -21,6 +21,7 @@ import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   projectDefaultInferenceRoute,
+  resolveSystemAgentTargetAgentId,
   sameDefaultInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
@@ -151,7 +152,7 @@ function applySystemAgentModelSelectionWithModules(
   const { agentScope, modelConfig, runtimePolicy } = modules;
   const nextConfig = structuredClone(params.config);
   const targetAgentId = params.targetAgentId ? normalizeAgentId(params.targetAgentId) : undefined;
-  const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
+  const agentId = resolveSystemAgentTargetAgentId(nextConfig, targetAgentId);
   const roster = agentScope.listAgentEntries(nextConfig);
   if (targetAgentId && !roster.some((entry) => normalizeAgentId(entry.id) === targetAgentId)) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
@@ -317,9 +318,8 @@ export async function applySystemAgentSetup(
     if (!guardModules) {
       return;
     }
-    const [{ resolveAgentDir, resolveDefaultAgentId }, { resolveDefaultModelForAgent }] =
-      guardModules;
-    const currentAgentId = resolveDefaultAgentId(config);
+    const [{ resolveAgentDir }, { resolveDefaultModelForAgent }] = guardModules;
+    const currentAgentId = resolveSystemAgentTargetAgentId(config);
     if (expectedAgentId && currentAgentId !== expectedAgentId) {
       throw new Error(
         "The default agent changed while AI access was being tested. Try setup again.",

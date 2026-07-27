@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";

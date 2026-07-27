@@ -11,7 +11,8 @@ import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js"
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { listAgentEntries, resolveSessionAgentIds, tryResolveSoleAgentId } from "./agent-scope.js";
+import { tryResolveSoleAgentId } from "./agent-scope-config.js";
+import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 
 /** Config surface that supplied a resolved model runtime policy. */
 type ModelRuntimePolicySource = "model" | "provider";

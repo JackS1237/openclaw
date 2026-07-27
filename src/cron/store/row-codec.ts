@@ -287,6 +287,12 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
   const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const rawAgentId =
+    row.agent_id !== null
+      ? row.agent_id
+      : Object.hasOwn(jobJson, "agentId")
+        ? jobJson.agentId
+        : undefined;
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
     typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
@@ -325,7 +331,8 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     createdAtMs,
     updatedAtMs:
       normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
-    ...(row.agent_id ? { agentId: row.agent_id } : {}),
+    // Preserve malformed explicit sidecar ownership for doctor/adoption validation.
+    ...(rawAgentId !== undefined ? { agentId: rawAgentId as string } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,
     ...(pacing !== undefined ? { pacing } : {}),
@@ -458,17 +465,27 @@ function cronStoreTopologyMatches(rows: CronJobRow[], store: CronStoreFile): boo
   if (rows.length !== store.jobs.length) {
     return false;
   }
-  const currentJobs = loadedCronStoreFromRows(rows).store.jobs;
+  const loaded = loadedCronStoreFromRows(rows);
+  const currentJobs = loaded.store.jobs;
   return store.jobs.every((job, index) => {
     const currentJob = currentJobs[index];
+    const currentConfigJob = loaded.configJobs[index];
     const normalizedCurrent = currentJob ? normalizeCronJobForSqlite(currentJob) : null;
+    const normalizedCurrentConfig = currentConfigJob
+      ? normalizeCronJobForSqlite(currentConfigJob as CronJob)
+      : null;
     const normalized = normalizeCronJobForSqlite(job);
     return Boolean(
       normalizedCurrent &&
+      normalizedCurrentConfig &&
       normalized &&
       normalizedCurrent.id === normalized.id &&
       isDeepStrictEqual(
         cronJobTopologyProjection(normalizedCurrent),
+        cronJobTopologyProjection(normalized),
+      ) &&
+      isDeepStrictEqual(
+        cronJobTopologyProjection(normalizedCurrentConfig),
         cronJobTopologyProjection(normalized),
       ),
     );
@@ -492,8 +509,13 @@ export function materializeCronRowAgentOwners(
   return runSqliteImmediateTransactionSync(db, () => {
     let rewritten = 0;
     for (const row of loadCronRows(db, storeKey)) {
+      const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
       const owner = {
-        ...(row.agent_id === null ? {} : { agentId: row.agent_id }),
+        ...(row.agent_id !== null
+          ? { agentId: row.agent_id }
+          : Object.hasOwn(jobJson, "agentId")
+            ? { agentId: jobJson.agentId }
+            : {}),
         ...(row.session_key === null ? {} : { sessionKey: row.session_key }),
       };
       if (
@@ -502,7 +524,6 @@ export function materializeCronRowAgentOwners(
       ) {
         continue;
       }
-      const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
       jobJson.agentId = owner.agentId;
       executeSqliteQuerySync(
         db,

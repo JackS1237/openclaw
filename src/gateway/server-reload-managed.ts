@@ -21,7 +21,10 @@ import {
   type ManagedGatewayConfigReloaderParams,
   type RuntimeSecretsPreflightParams,
 } from "./server-reload-contracts.js";
-import { createGatewayReloadHandlers } from "./server-reload-hot.js";
+import {
+  createGatewayReloadHandlers,
+  reloadPlanChangesAgentResolution,
+} from "./server-reload-hot.js";
 import {
   createManagedReloadSecretHandlers,
   isRuntimeSecretsPreparationCurrent,
@@ -168,6 +171,12 @@ export function startManagedGatewayConfigReloader(
       }
     };
     assertCurrent();
+    if (reloadPlanChangesAgentResolution(plan)) {
+      // The old scheduler still owns the retained legacy id. Adopt its rows before
+      // restart tears it down, or the replacement can cold-start ownerless jobs.
+      await params.getState().cronState.cron.reloadForConfigAdoption();
+      assertCurrent();
+    }
     const restartLifecycle = beginGatewayRestartLifecycle();
     let preparation:
       | {

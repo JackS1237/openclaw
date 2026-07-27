@@ -236,7 +236,7 @@ describe("config io write", () => {
   };
 
   itWithHome(
-    "retains explicit ownership when a generic multi-agent write omits the marker",
+    "retains explicit ownership when an explicit agents write omits the marker",
     async (home) => {
       const { configPath } = await writeConfigFixture(home, {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
@@ -244,9 +244,13 @@ describe("config io write", () => {
       });
       const io = createFastConfigIO(home);
 
-      await io.writeConfigFile({
+      const markerless = {
         agents: { entries: { ops: {}, research: {} } },
         gateway: { mode: "local", port: 19_001 },
+      } satisfies OpenClawConfig;
+      await io.writeConfigFile(markerless, {
+        explicitSetPaths: [["agents"]],
+        explicitSetValueSource: markerless,
       });
 
       const persisted = await readPersistedConfig(configPath);

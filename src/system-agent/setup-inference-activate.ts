@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -17,6 +16,7 @@ import { resolveUserPath } from "../utils.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectDefaultInferenceRoute,
+  resolveSystemAgentTargetAgentId,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
@@ -178,7 +178,7 @@ async function activateSetupInferenceUnredacted(
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveDefaultAgentId(stagedConfig),
+        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig),
       };
     }
 

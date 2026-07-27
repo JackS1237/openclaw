@@ -7,6 +7,31 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 describe("agent workspace plugin ownership", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("canonicalizes and pins a legacy list during sole-to-fleet expansion", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/srv/shared" }, list: [{ id: "ops" }] },
+    };
+    const targetConfig: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/srv/shared" },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+
+    const pinned = pinSoleAgentWorkspaceForFleetExpansion({
+      sourceConfig,
+      targetConfig,
+      agentId: "ops",
+    });
+
+    expect(pinned.config.agents?.list).toBeUndefined();
+    expect(pinned.config.agents?.entries).toEqual({
+      ops: { workspace: "/srv/shared" },
+      research: {},
+    });
+    expect(pinned.insertedPaths).toContainEqual(["agents", "entries", "ops", "workspace"]);
+  });
+
   it.each([
     ["null plugins", null],
     ["null plugins.load", { load: null }],

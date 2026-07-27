@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,

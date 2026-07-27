@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  resolveAgentWorkspaceDir,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -20,7 +24,11 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
   env?: NodeJS.ProcessEnv;
 }): AgentWorkspaceOwnershipPin {
   const agentId = normalizeAgentId(params.agentId);
-  const entries = { ...params.targetConfig.agents?.entries };
+  const targetAgents = params.targetConfig.agents ?? {};
+  const { list: _legacyList, ...canonicalTargetAgents } = targetAgents;
+  const entries = targetAgents.entries
+    ? { ...targetAgents.entries }
+    : toAgentEntriesRecord(listAgentEntries(params.targetConfig));
   const entryKey = Object.keys(entries).find(
     (candidate) => normalizeAgentId(candidate) === agentId,
   );
@@ -53,7 +61,10 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
   return {
     config: {
       ...params.targetConfig,
-      agents: { ...params.targetConfig.agents, entries },
+      agents: {
+        ...canonicalTargetAgents,
+        entries,
+      },
       ...(preservePluginPath
         ? {
             plugins: {

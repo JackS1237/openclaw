@@ -45,7 +45,7 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 
-function reloadPlanChangesAgentResolution(plan: GatewayReloadPlan): boolean {
+export function reloadPlanChangesAgentResolution(plan: GatewayReloadPlan): boolean {
   return plan.changedPaths.some(
     (changedPath) =>
       changedPath === "agents" ||

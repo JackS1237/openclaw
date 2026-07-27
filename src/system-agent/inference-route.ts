@@ -6,7 +6,6 @@ import {
   listAgentEntries,
   resolveDefaultAgentId,
   toAgentEntriesRecord,
-  tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -280,12 +279,10 @@ export async function projectInferenceRoute(
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
-  const soleAgentId = tryResolveDefaultAgentId(config);
-  const explicitDefaultIds = requestedAgentId ? [routeAgentId] : soleAgentId ? [soleAgentId] : [];
   return {
     route: projectedRoute,
     defaultSelection: {
-      explicitIds: explicitDefaultIds,
+      explicitIds: [routeAgentId],
     },
     auth: {
       profiles: authProfiles,

@@ -16,12 +16,8 @@ import {
 } from "../plugins/prepared-message-tool-catalog.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  tryResolveSoleAgentId,
-} from "./agent-scope.js";
+import { tryResolveSoleAgentId } from "./agent-scope-config.js";
+import { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";

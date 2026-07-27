@@ -6,11 +6,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  listAgentEntries,
-  resolveAgentWorkspaceDir,
-  tryResolveSoleAgentId,
-} from "./agent-scope.js";
+import { tryResolveSoleAgentId } from "./agent-scope-config.js";
+import { listAgentEntries, resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 /** Lists unique workspace directories for every configured agent or the implicit sole agent. */
 export function listAgentWorkspaceDirs(cfg: OpenClawConfig): string[] {
