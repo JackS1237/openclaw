@@ -455,6 +455,23 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
   });
 
+  it("allows ambiguous fleets when plugin discovery uses explicit load paths", async () => {
+    await prepareBootstrapWithRuntimeConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          ops: { workspace: "/srv/ops" },
+          research: { workspace: "/srv/research" },
+        },
+      },
+      plugins: { load: { paths: ["/srv/plugins"] } },
+    });
+
+    expect(
+      firstCallArg<{ workspaceDir?: string }>(loadPluginLookUpTable).workspaceDir,
+    ).toBeUndefined();
+  });
+
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
       channels: {

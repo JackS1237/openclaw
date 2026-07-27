@@ -149,13 +149,14 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultWorkspaceDir = resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
+  const pluginWorkspaceDir = resolveGatewayPluginWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
@@ -197,7 +198,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       {
         cfg: gatewayPluginConfig,
         activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
+        workspaceDir: pluginWorkspaceDir,
         log: params.log,
         baseMethods,
         coreGatewayMethodNames,
@@ -215,7 +216,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       {
         cfg: gatewayPluginConfig,
         activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
+        workspaceDir: pluginWorkspaceDir,
         log: params.log,
         baseMethods,
         coreGatewayMethodNames,
@@ -241,6 +242,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
     pluginLookUpTable,
