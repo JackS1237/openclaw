@@ -62,14 +62,14 @@ export function migrateLegacyOnboardingRecommendationsScope(params: {
       ({ db: writeDatabase }) => {
         const writeDb =
           getNodeSqliteKysely<OnboardingRecommendationsMigrationDatabase>(writeDatabase);
-        const legacy = executeSqliteQueryTakeFirstSync(
+        const legacyAtCommit = executeSqliteQueryTakeFirstSync(
           writeDatabase,
           writeDb
             .selectFrom("onboarding_recommendations")
             .select("config_key")
             .where("config_key", "=", LEGACY_ONBOARDING_RECOMMENDATIONS_KEY),
         );
-        if (!legacy) {
+        if (!legacyAtCommit) {
           return "unchanged" as const;
         }
         const scoped = executeSqliteQueryTakeFirstSync(
