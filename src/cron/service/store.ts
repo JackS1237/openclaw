@@ -314,10 +314,10 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       try {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
         prepareReloadedCronJobsForScheduling(state);
-        // Store loading is timer-owned, so keep this rare conflict path lazy to avoid
-        // a store -> scheduler -> store module-initialization cycle.
-        const { armTimer } = await import("./timer.js");
-        armTimer(state);
+        // Keep this rare recovery edge lazy: timer-scheduler imports this store,
+        // so an eager import here would create a module-initialization cycle.
+        const { armTimerAfterStoreReload } = await import("./timer-arm.runtime.js");
+        armTimerAfterStoreReload(state);
       } catch (reloadError) {
         // Preserve the mismatch classification so persistOrRestore cannot put
         // the stale snapshot back. The next operation must load from SQLite.
