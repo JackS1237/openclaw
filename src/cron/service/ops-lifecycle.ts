@@ -112,6 +112,7 @@ export async function refreshLegacyDefaultAgentOwnerHandoff(
 export async function reloadForConfigAdoption(state: CronServiceState) {
   const release = await acquireCronOperationLock(state);
   try {
+    await ensureLoaded(state, { skipRecompute: true });
     const legacyDefaultAgentId = resolveCurrentDefaultAgentId(state);
     if (legacyDefaultAgentId) {
       await materializeLoadedLegacyDefaultAgentOwners(state, legacyDefaultAgentId);

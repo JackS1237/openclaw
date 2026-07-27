@@ -191,8 +191,10 @@ export async function writeConfigFileFromContext(
   const previousSoleHandoffAgentId =
     entersMultiAgent && previousSoleRemains ? previousSoleAgentId : undefined;
   const persistOwnership = entersMultiAgent || retainedLegacyDefaultAgentId !== undefined;
+  const retainExplicitOwnership =
+    nextAgentEntries.length > 1 && snapshot.config.agents?.ownership === "explicit";
   const shouldStampOwnershipGeneration =
-    persistOwnership && nextConfig.agents?.ownership === undefined;
+    (persistOwnership || retainExplicitOwnership) && nextConfig.agents?.ownership === undefined;
   const ownershipGenerationInserted =
     shouldStampOwnershipGeneration && snapshot.config.agents?.ownership !== "explicit";
   if (shouldStampOwnershipGeneration) {

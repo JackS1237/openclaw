@@ -252,6 +252,23 @@ describe("cron service store seam coverage", () => {
     );
   });
 
+  it("loads and migrates a lazy service before adopting ownerless rows", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob({ id: "lazy-ownerless" }));
+    const state = createStoreTestState(storePath);
+    state.deps.defaultAgentId = "ops";
+    state.deps.cronEnabled = false;
+    expect(state.store).toBeNull();
+
+    await reloadForConfigAdoption(state);
+
+    expect(state.store?.jobs[0]).toMatchObject({ id: "lazy-ownerless", agentId: "ops" });
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      id: "lazy-ownerless",
+      agentId: "ops",
+    });
+  });
+
   it("refuses a stale state-only write and preserves replacement runtime state", async () => {
     const { storePath } = await makeStorePath();
     const jobId = "state-only-epoch";
