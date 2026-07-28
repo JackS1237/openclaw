@@ -9,6 +9,7 @@ import { enablePluginInConfig } from "../plugins/enable.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentTargetAgentId,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
@@ -104,6 +105,13 @@ export async function persistActivatedSetupInference(input: {
     plan.config,
     plan.routeAgentId,
   );
+  const baselineAmbientAgentId = (() => {
+    try {
+      return resolveSystemAgentTargetAgentId(cfg);
+    } catch {
+      return undefined;
+    }
+  })();
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,
@@ -240,13 +248,24 @@ export async function persistActivatedSetupInference(input: {
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
         const stagedRuntime = stageCandidate(latestRuntime, "runtime");
-        // The selected route stays pinned for mutation, while this ambient
-        // projection still detects a concurrent default-owner change.
-        const latestBaseline = await projectInferenceRoute(latestRuntime);
+        const latestBaseline = await projectInferenceRoute(latestRuntime, plan.routeAgentId);
         if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
           );
+        }
+        if (baselineAmbientAgentId === plan.routeAgentId) {
+          let latestAmbientAgentId: string | undefined;
+          try {
+            latestAmbientAgentId = resolveSystemAgentTargetAgentId(latestRuntime);
+          } catch {
+            latestAmbientAgentId = undefined;
+          }
+          if (latestAmbientAgentId !== baselineAmbientAgentId) {
+            throw new Error(
+              "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
+            );
+          }
         }
         if (
           !isDeepStrictEqual(

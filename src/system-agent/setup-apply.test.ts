@@ -547,8 +547,9 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.state.commitSnapshot = snapshot("probe", config);
 
     await expect(
-      applySystemAgentSetup(baseParams({ expectedAgentId: "main" })),
+      applySystemAgentSetup(baseParams({ expectedAgentId: "main", model: "openai/gpt-5.5" })),
     ).resolves.toMatchObject({ configPath: "/tmp/openclaw.json" });
+    expect(mocks.state.persistedConfig?.agents?.defaults?.model).toBe("openai/gpt-5.5");
   });
 
   it("rejects an ownerless workspace-only setup before persisting the candidate", async () => {

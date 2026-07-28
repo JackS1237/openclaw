@@ -459,10 +459,11 @@ export async function applySystemAgentSetup(
       preserveWorkspace,
     });
     if (model) {
+      const modelSelectionAgentId = hasAgentRosterProperty(candidate) ? setupAgentId : undefined;
       candidate = await applySystemAgentModelSelection({
         config: candidate,
         model,
-        ...(setupAgentId ? { targetAgentId: setupAgentId } : {}),
+        ...(modelSelectionAgentId ? { targetAgentId: modelSelectionAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(authProfileId ? { authProfileId } : {}),
       });
