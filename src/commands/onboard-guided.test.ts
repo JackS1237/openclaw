@@ -1091,8 +1091,7 @@ describe("runGuidedOnboarding", () => {
     expect(remoteConfig.modelRef).toBe("claude-cli/opus");
     expect(localConfig).toEqual(localConfigBefore);
     expect(text).not.toHaveBeenCalled();
-    expect(
-      JSON.stringify([prompter.note, prompter.outro, runtime.log, runtime.error]),
-    ).not.toContain("selected-token");
+    const output = [prompter.note, prompter.outro, runtime.log, runtime.error];
+    expect(JSON.stringify(output)).not.toContain("selected-token");
   });
 });
