@@ -31,7 +31,7 @@ import { handleHeartbeatTerminalToolFailure } from "./heartbeat-terminal-tool-fa
 import type { HeartbeatRunResult } from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
+import { consumeSelectedSystemEventEntriesBySource } from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -478,6 +478,9 @@ async function clearSatisfiedPendingFinalDelivery(
 
 function consumeInspectedSystemEvents(wake: ReadyHeartbeatWake, prepared: PreparedHeartbeatRun) {
   if (wake.preflight.shouldInspectPendingEvents && prepared.inspectedSystemEventsToConsume.length) {
-    consumeSelectedSystemEventEntries(prepared.sessionKey, prepared.inspectedSystemEventsToConsume);
+    consumeSelectedSystemEventEntriesBySource(
+      prepared.sessionKey,
+      prepared.inspectedSystemEventsToConsume,
+    );
   }
 }

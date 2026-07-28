@@ -146,7 +146,12 @@ export async function resolveHeartbeatPreflight(params: {
     params.runScope === "commitment-only"
       ? []
       : [...eventQueueKeys]
-          .flatMap((sessionKey) => peekSystemEventEntries(sessionKey))
+          .flatMap((sessionKey) =>
+            peekSystemEventEntries(sessionKey).map((event) => ({
+              ...event,
+              sourceQueueKey: sessionKey,
+            })),
+          )
           .sort((left, right) => left.ts - right.ts);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
@@ -182,8 +187,8 @@ export async function resolveHeartbeatPreflight(params: {
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
-    shouldInspectWakePendingEvents ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    (wakeFlags.isWakePayload ? shouldInspectWakePendingEvents : pendingEventEntries.length > 0);
   const shouldBypassFileGates =
     params.runScope === "commitment-only" ||
     wakeFlags.isExecEventWake ||
@@ -293,6 +298,21 @@ export function resolveHeartbeatRunPrompt(params: {
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  // Specialized prompts consume only their matching entries; generic events
+  // stay queued for a later turn instead of competing with exec/cron delivery.
+  const genericEvents =
+    !hasExecCompletion && !hasCronEvents && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries
+          .filter(
+            (event) =>
+              !isExecCompletionEvent(event.text) &&
+              !(
+                (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+                isCronSystemEvent(event.text)
+              ),
+          )
+          .map((event) => event.text)
+      : [];
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -360,9 +380,11 @@ ${completionInstruction}`;
     basePrompt,
     params.heartbeatScratchContent,
   );
-  const prompt = commitmentPrompt
-    ? `${basePromptWithDirectives}\n\n${commitmentPrompt}`
-    : basePromptWithDirectives;
+  const promptWithEvents =
+    genericEvents.length > 0
+      ? `${basePromptWithDirectives}\n\nPending system events:\n${genericEvents.join("\n")}`
+      : basePromptWithDirectives;
+  const prompt = commitmentPrompt ? `${promptWithEvents}\n\n${commitmentPrompt}` : promptWithEvents;
 
   return {
     prompt,
