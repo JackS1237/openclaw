@@ -144,9 +144,9 @@ describe("gateway hooks helpers", () => {
   });
 
   test("normalizeWakePayload trims + validates", () => {
-    expect(normalizeWakePayload({ text: "  hi " })).toEqual({
+    expect(normalizeWakePayload({ text: "  hi ", agentId: " ops " })).toEqual({
       ok: true,
-      value: { text: "hi", mode: "now" },
+      value: { text: "hi", mode: "now", agentId: "ops" },
     });
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
   });

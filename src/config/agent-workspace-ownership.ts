@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   listAgentEntries,
@@ -63,8 +62,7 @@ export function pinSoleAgentWorkspaceForFleetExpansion(params: {
   const preservePluginPath =
     (rawPlugins === undefined || isRecord(rawPlugins)) &&
     (rawPluginLoad === undefined || isRecord(rawPluginLoad)) &&
-    (rawPluginPaths === undefined || Array.isArray(rawPluginPaths)) &&
-    fs.existsSync(pluginPath);
+    (rawPluginPaths === undefined || Array.isArray(rawPluginPaths));
   return {
     config: {
       ...params.targetConfig,

@@ -274,6 +274,55 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("preserves mapping agentId when transforms switch action kinds", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-kind-switch-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      [
+        "export default ({ payload }) => payload.to === 'wake'",
+        "  ? { kind: 'wake', text: 'Wake' }",
+        "  : { kind: 'agent', message: 'Agent' };",
+      ].join("\n"),
+    );
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "to-wake" },
+            action: "agent",
+            agentId: "hooks",
+            transform: { module: "transform.mjs" },
+          },
+          {
+            match: { path: "to-agent" },
+            action: "wake",
+            agentId: "ops",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const toWake = await applyHookMappings(mappings, {
+      payload: { to: "wake" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/to-wake"),
+      path: "to-wake",
+    });
+    expect(toWake).toMatchObject({ ok: true, action: { kind: "wake", agentId: "hooks" } });
+
+    const toAgent = await applyHookMappings(mappings, {
+      payload: { to: "agent" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/to-agent"),
+      path: "to-agent",
+    });
+    expect(toAgent).toMatchObject({ ok: true, action: { kind: "agent", agentId: "ops" } });
+  });
+
   it("treats transform-provided session keys as templated by default", async () => {
     const result = await applyGmailTransformSessionKey({
       tempPrefix: "openclaw-config-sessionkey-xform-",

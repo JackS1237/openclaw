@@ -204,17 +204,19 @@ export function normalizeHookHeaders(req: IncomingMessage) {
 }
 
 /** Validate a hook wake payload. */
-export function normalizeWakePayload(
-  payload: Record<string, unknown>,
-):
-  | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
+export function normalizeWakePayload(payload: Record<string, unknown>):
+  | {
+      ok: true;
+      value: { text: string; mode: "now" | "next-heartbeat"; agentId?: string };
+    }
   | { ok: false; error: string } {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  return { ok: true, value: { text: normalizedText, mode } };
+  const agentId = normalizeOptionalString(payload.agentId);
+  return { ok: true, value: { text: normalizedText, mode, ...(agentId ? { agentId } : {}) } };
 }
 
 type HookAgentPayload = {

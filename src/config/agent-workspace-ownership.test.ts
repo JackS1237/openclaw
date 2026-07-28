@@ -1,13 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { pinSoleAgentWorkspaceForFleetExpansion } from "./agent-workspace-ownership.js";
 import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("agent workspace plugin ownership", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   it("canonicalizes and pins a legacy list during sole-to-fleet expansion", () => {
     const sourceConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/srv/shared" }, list: [{ id: "ops" }] },
@@ -33,8 +30,7 @@ describe("agent workspace plugin ownership", () => {
     expect(pinned.insertedPaths).toContainEqual(["agents", "entries", "ops", "workspace"]);
   });
 
-  it("preserves an existing sole workspace plugin path during fleet expansion", () => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+  it("preserves the sole workspace plugin path before its directory exists", () => {
     const sourceConfig: OpenClawConfig = {
       agents: { entries: { ops: { workspace: "/srv/ops" } } },
     };
@@ -62,7 +58,6 @@ describe("agent workspace plugin ownership", () => {
     ["null plugins", null],
     ["null plugins.load", { load: null }],
   ])("preserves malformed %s while pinning a workspace", (_label, plugins) => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
     const malformedPlugins = plugins as unknown as OpenClawConfig["plugins"];
     const sourceConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/srv/shared" }, entries: { ops: {} } },

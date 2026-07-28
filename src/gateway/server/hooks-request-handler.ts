@@ -266,7 +266,14 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      const targetAgentId = hooksConfig.agentPolicy.defaultAgentId;
+      if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
+        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        return true;
+      }
+      const targetAgentId = resolveEffectiveHookTargetAgentId(
+        hooksConfig,
+        normalized.value.agentId,
+      );
       if (!targetAgentId) {
         sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
         return true;
@@ -368,7 +375,14 @@ export function createHooksRequestHandler(
             return true;
           }
           if (mapped.action.kind === "wake") {
-            const targetAgentId = hooksConfig.agentPolicy.defaultAgentId;
+            if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
+              sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+              return true;
+            }
+            const targetAgentId = resolveEffectiveHookTargetAgentId(
+              hooksConfig,
+              mapped.action.agentId,
+            );
             if (!targetAgentId) {
               sendJson(res, 400, { ok: false, error: getHookAgentSelectionError() });
               return true;

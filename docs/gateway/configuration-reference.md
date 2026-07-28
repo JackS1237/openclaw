@@ -924,11 +924,12 @@ Validation and safety notes:
 
 **Endpoints:**
 
-- `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
+- `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat", agentId? }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
+  - Wake mappings may set `agentId`; explicit multi-agent fleets must select an agent in the mapping or request.
 
 <Accordion title="Mapping details">
 
