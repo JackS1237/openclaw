@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  isUnscopedSessionKeySentinel,
   isSubagentSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
@@ -178,6 +179,9 @@ function isConfiguredAgentMainSessionKey(params: {
   sessionKey: string;
   mainKey: string;
 }): boolean {
+  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
+    return false;
+  }
   const agentId = resolveAgentIdFromSessionKey(
     params.sessionKey,
     tryResolveSoleAgentId(params.cfg),
@@ -601,7 +605,7 @@ export function createSessionsSendTool(opts?: {
         resolvedTargetAgentId ??
         parseAgentSessionKey(resolvedKey)?.agentId ??
         (labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined) ??
-        (resolvedKey === "global" ? requesterAgentId : undefined);
+        (isUnscopedSessionKeySentinel(resolvedKey) ? requesterAgentId : undefined);
       const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
@@ -637,7 +641,9 @@ export function createSessionsSendTool(opts?: {
         a2aPolicy,
       });
       const authorizationTargetKey =
-        resolvedKey === "global" && targetAgentId ? `agent:${targetAgentId}:global` : resolvedKey;
+        isUnscopedSessionKeySentinel(resolvedKey) && targetAgentId
+          ? `agent:${targetAgentId}:${resolvedKey}`
+          : resolvedKey;
       const access = visibilityGuard.check(authorizationTargetKey);
       if (!access.allowed) {
         return jsonResult({

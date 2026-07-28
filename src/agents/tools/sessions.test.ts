@@ -876,6 +876,48 @@ describe("sessions_send gating", () => {
     ]);
   });
 
+  it("keeps the unknown sentinel owned by the requesting agent", async () => {
+    const tool = createSessionsSendTool({
+      agentId: "main",
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      callGateway: callGatewayMock,
+      config: {
+        agents: { entries: { main: {}, other: {} } },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        return { key: "unknown" };
+      }
+      if (request.method === "sessions.list") {
+        return { path: "/tmp/sessions.json", sessions: [{ key: "unknown", kind: "direct" }] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-unknown", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-unknown", {
+      sessionKey: "unknown",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("accepted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({ agentId: "main", sessionKey: "unknown" }),
+      }),
+    );
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
 
