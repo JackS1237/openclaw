@@ -41,6 +41,7 @@ export const hi: TranslationMap = {
     unselect: "चयन हटाएँ",
     enabled: "सक्षम",
     disabled: "अक्षम",
+    failed: "विफल",
     none: "कोई नहीं",
     na: "लागू नहीं",
     never: "कभी नहीं",
@@ -239,11 +240,6 @@ export const hi: TranslationMap = {
       schemaUnavailable: "स्कीमा अनुपलब्ध। Raw का उपयोग करें।",
       channelSchemaUnavailable: "चैनल कॉन्फ़िग स्कीमा अनुपलब्ध।",
       loadingSchema: "कॉन्फ़िग स्कीमा लोड हो रहा है…",
-    },
-    health: {
-      title: "चैनल स्वास्थ्य",
-      subtitle: "गेटवे से चैनल स्थिति के स्नैपशॉट।",
-      noSnapshotYet: "अभी तक कोई स्नैपशॉट नहीं।",
     },
     generic: {
       subtitle: "चैनल स्थिति और कॉन्फ़िगरेशन।",
@@ -590,7 +586,8 @@ export const hi: TranslationMap = {
     worktreeNameInvalid: "Worktree names में lowercase letters, digits, और dashes का उपयोग होता है।",
     incognito: "गुप्त",
     incognitoDescription: "इस थ्रेड को केवल तब तक रखें जब तक Gateway पुनः आरंभ न हो जाए",
-    startAsDraft: "ड्राफ़्ट के रूप में शुरू करें",
+    draft: "ड्राफ़्ट",
+    draftDescription: "इस थ्रेड को प्रकाशित करने तक अपने पास ही रखें",
     messagePlaceholder: "यह session किस पर काम करे?",
     readingAttachment: "अटैचमेंट पढ़ रहे हैं",
     start: "Session शुरू करें",
@@ -599,6 +596,11 @@ export const hi: TranslationMap = {
     createOutcomeUnknown:
       "इस सत्र के शुरू होने के दौरान Gateway बदल गया। इस कार्य को दोबारा शुरू करने से पहले हाल के सत्रों की जाँच करें।",
     catalogUnavailable: "यह सत्र लक्ष्य उपलब्ध नहीं है।",
+  },
+  dashboardsPage: {
+    emptyTitle: "अभी तक कोई dashboard नहीं",
+    emptyDescription: "किसी थ्रेड को खोलें और यहाँ जोड़ने के लिए Dashboard face पर स्विच करें।",
+    loadError: "Dashboards लोड नहीं हो सके: {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -721,6 +723,7 @@ export const hi: TranslationMap = {
     runErrorTimedOut: "समय समाप्त",
     runErrorUnknown: "अज्ञात त्रुटि",
     attentionRequired: "सत्र पर ध्यान देना आवश्यक है",
+    openSession: "थ्रेड खोलें",
     model: "मॉडल",
     provider: "प्रदाता",
     runtime: "रनटाइम",
@@ -976,6 +979,8 @@ export const hi: TranslationMap = {
       notCreatedYet: "अभी तक बनाया नहीं गया",
       updatedUnknown: "अपडेट अज्ञात",
       missingHint: "यह फ़ाइल गुम है। सेव करने पर यह एजेंट वर्कस्पेस में बन जाएगी।",
+      addFile: "फ़ाइल जोड़ें…",
+      createHint: "यह फ़ाइल अभी मौजूद नहीं है। सहेजने पर यह agent workspace में बन जाएगी।",
       content: "सामग्री",
       words: "{count} शब्द",
       lines: "पंक्तियाँ",
@@ -1819,6 +1824,7 @@ export const hi: TranslationMap = {
     skillWorkshop: "कौशल वर्कशॉप",
     nodes: "नोड्स",
     chat: "चैट",
+    dashboards: "Dashboards",
     custodian: "OpenClaw",
     config: "कॉन्फ़िग",
     profile: "प्रोफ़ाइल",
@@ -1826,6 +1832,7 @@ export const hi: TranslationMap = {
     appearance: "दिखावट",
     automation: "ऑटोमेशन",
     mcp: "MCP",
+    memory: "मेमोरी",
     infrastructure: "इन्फ्रास्ट्रक्चर",
     labs: "Labs",
     about: "परिचय",
@@ -1855,6 +1862,7 @@ export const hi: TranslationMap = {
     skillWorkshop: "प्रस्तावों के लाइव स्किल्स बनने से पहले उनकी समीक्षा करें, उन्हें परिष्कृत करें और लागू करें।",
     nodes: "पेयर किए गए डिवाइस और कमांड्स।",
     chat: "त्वरित हस्तक्षेपों के लिए गेटवे चैट।",
+    dashboards: "वे थ्रेड जो अपने dashboard face पर खुलते हैं।",
     custodian: "सिस्टम सेटअप और देखभाल।",
     config: "openclaw.json संपादित करें।",
     profile: "आपके एजेंट के आँकड़े, streaks, और रीफ में जीवन।",
@@ -1862,6 +1870,7 @@ export const hi: TranslationMap = {
     appearance: "थीम, UI, और सेटअप विज़ार्ड सेटिंग्स।",
     automation: "कमांड, हुक, cron, और प्लगइन।",
     mcp: "MCP सर्वर, auth, टूल, और डायग्नोस्टिक्स।",
+    memory: "Memory इंजन, backend, खोज और dreaming।",
     infrastructure: "Gateway, web, browser, और media सेटिंग्स।",
     labs: "प्रयोगात्मक एजेंट और टूल क्षमताएँ।",
     about: "Control UI और कनेक्टेड Gateway बिल्ड पहचान।",
@@ -2126,6 +2135,152 @@ export const hi: TranslationMap = {
     tlsVerifyOff: "TLS सत्यापन बंद",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "Memory अनुभाग",
+    tabs: {
+      overview: "ओवरव्यू",
+      search: "खोजें",
+      dreaming: "ड्रीमिंग",
+    },
+    engine: {
+      title: "इंजन",
+      description:
+        "बिल्कुल एक memory plugin memory slot का स्वामी होता है। किसी इंजन को चुनने पर वह सक्षम हो जाता है और अन्य अक्षम हो जाते हैं।",
+      rowTitle: "Memory इंजन",
+      off: "बंद",
+      autoHint: "config में कोई इंजन पिन नहीं है, इसलिए slot अपने डिफ़ॉल्ट स्वामी पर वापस चला जाता है।",
+      explicitHint: "यह इंजन config में plugins.slots.memory के अंतर्गत पिन किया गया है।",
+      offHint: "config में Memory बंद है: plugins.slots.memory को none पर सेट किया गया है।",
+      catalogUnavailable: "Memory इंजन बदलने के लिए gateway से कनेक्ट करें।",
+      changeFailed: "Memory इंजन बदला नहीं जा सका",
+      disabledTitle: "यह इंजन अक्षम है",
+      disabledHint:
+        "मेमोरी स्लॉट इस प्लगइन की ओर इंगित करता है, लेकिन प्लगइन स्वयं अक्षम है, इसलिए मेमोरी नहीं चल रही है।",
+      enable: "सक्षम करें",
+    },
+    backend: {
+      title: "Backend",
+      description: "चयनित इंजन के लिए मेमोरी कैसे संग्रहीत और पुनर्प्राप्त की जाती है।",
+      rowTitle: "पुनर्प्राप्ति backend",
+      builtin: "बिल्ट-इन",
+      qmd: "QMD",
+      builtinHint: "मेमोरी फ़ाइलें OpenClaw द्वारा स्वयं अनुक्रमित और खोजी जाती हैं।",
+      qmdHint: "पुनर्प्राप्ति QMD को सौंपी जाती है। इसकी सेटिंग्स नीचे दिखाई देती हैं।",
+    },
+    addons: {
+      title: "Add-ons",
+      description:
+        "ये प्लगइन स्लॉट के लिए प्रतिस्पर्धा करने के बजाय इंजन के ऊपर परत बनाते हैं, इसलिए कोई भी संयोजन एक साथ चल सकता है।",
+      activeMemory: {
+        title: "सक्रिय मेमोरी",
+      },
+      memoryWiki: {
+        title: "मेमोरी विकी",
+      },
+      stateUnknown: "अज्ञात",
+      manage: "Add-ons सक्षम या अक्षम करें",
+      manageLink: "Plugins खोलें",
+    },
+    import: {
+      title: "इंपोर्ट करें",
+      description: "अन्य सहायकों से मौजूदा मेमोरी को एजेंट वर्कस्पेस में लाएं।",
+      link: "Memory Import खोलें",
+    },
+    search: {
+      intro:
+        "एम्बेडिंग और पुनर्प्राप्ति डिफ़ॉल्ट जो हर उस एजेंट द्वारा साझा किए जाते हैं जिसमें कोई मेमोरी ओवरराइड नहीं है।",
+    },
+    dreaming: {
+      intro:
+        "Dreaming हर एजेंट वर्कस्पेस में एक प्रबंधित cron job के रूप में चलता है, इसलिए ये सेटिंग्स वैश्विक हैं। ये {plugin} प्लगइन के स्वामित्व में हैं।",
+      schedule: {
+        title: "शेड्यूल",
+        description: "पूर्ण स्वीप कब चलता है और कौन सा मॉडल इसे वर्णित करता है।",
+      },
+      frequency: {
+        label: "Dreaming आवृत्ति",
+        help: "पूर्ण dreaming स्वीप के लिए Cron ताल (light, REM, फिर deep)। प्लगइन डिफ़ॉल्ट के लिए खाली छोड़ें।",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "समय क्षेत्र",
+        help: "cron अंतराल की व्याख्या करने के लिए उपयोग किया जाने वाला IANA समय क्षेत्र।",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Dreaming मॉडल",
+        help: "dream diary वर्णन के लिए Provider/model ओवरराइड। subagent मॉडल ओवरराइड की अनुमति होना आवश्यक है।",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "विस्तृत लॉगिंग",
+        help: "प्रत्येक dreaming चरण को विस्तार से लॉग करें। थ्रेशोल्ड ट्यून करते समय उपयोगी।",
+      },
+      storage: {
+        title: "भंडारण",
+        description: "जहाँ प्रचारित यादें और dreaming रिपोर्ट लिखी जाती हैं।",
+        modeLabel: "भंडारण मोड",
+        modeHelp: "Inline मेमोरी फ़ाइल में लिखता है; separate एक समर्पित रिपोर्ट फ़ाइल रखता है।",
+        modes: {
+          inline: "Inline",
+          separate: "Separate",
+          both: "Both",
+        },
+        separateReportsLabel: "अलग रिपोर्ट",
+        separateReportsHelp: "dreaming रिपोर्ट को मुख्य मेमोरी फ़ाइल से बाहर रखें।",
+      },
+      phases: {
+        light: {
+          title: "Light चरण",
+          description: "सस्ता हाल-की-गतिविधि पास जो replay उम्मीदवारों को स्टेज करता है।",
+        },
+        deep: {
+          title: "Deep चरण",
+          description: "स्कोर की गई प्रमोशन पास जो अल्पकालिक प्रविष्टियों को मेमोरी में उन्नत करती है।",
+        },
+        rem: {
+          title: "REM चरण",
+          description: "पैटर्न पास जो लुकबैक विंडो में आवर्ती थीम खोजता है।",
+        },
+      },
+      phaseFields: {
+        enabled: "सक्षम",
+        enabledHelp: "स्वीप के दौरान यह चरण चलाएँ।",
+        lookbackDays: "लुकबैक दिन",
+        lookbackDaysHelp: "यह चरण कितना पीछे तक पढ़ता है। प्लगइन डिफ़ॉल्ट के लिए खाली छोड़ें।",
+        limit: "सीमा",
+        limitHelp: "प्रति रन इस चरण द्वारा संसाधित अधिकतम प्रविष्टियाँ।",
+        dedupeSimilarity: "डीड्यूप समानता",
+        dedupeSimilarityHelp: "जिस समानता से ऊपर दो उम्मीदवारों को डुप्लिकेट माना जाता है।",
+        minScore: "न्यूनतम स्कोर",
+        minScoreHelp: "प्रमोशन स्कोर जिस तक एक प्रविष्टि को पहुँचना चाहिए।",
+        minRecallCount: "न्यूनतम रिकॉल",
+        minRecallCountHelp: "प्रमोट होने से पहले किसी प्रविष्टि को कितनी बार रिकॉल किया जाना चाहिए।",
+        minUniqueQueries: "न्यूनतम अद्वितीय क्वेरी",
+        minUniqueQueriesHelp: "कितनी अलग-अलग क्वेरी ने प्रविष्टि को सामने लाया होना चाहिए।",
+        recencyHalfLifeDays: "अद्यतनता अर्ध-आयु (दिन)",
+        recencyHalfLifeDaysHelp: "पुराने रिकॉल संकेत कितनी तेज़ी से वज़न खोते हैं।",
+        maxAgeDays: "अधिकतम आयु (दिन)",
+        maxAgeDaysHelp: "इससे पुरानी अल्पकालिक प्रविष्टियों को अनदेखा करें।",
+        maxPromotedSnippetTokens: "अधिकतम प्रमोटेड स्निपेट टोकन",
+        maxPromotedSnippetTokensHelp: "प्रत्येक प्रचारित स्निपेट के लिए टोकन बजट। प्रोवेनेंस संलग्न रहती है।",
+        minPatternStrength: "न्यूनतम पैटर्न शक्ति",
+        minPatternStrengthHelp: "रिपोर्ट किए जाने के लिए किसी आवर्ती पैटर्न को जिस शक्ति तक पहुँचना चाहिए।",
+      },
+      agentScope: {
+        title: "एजेंट दृश्य",
+        description:
+          "ऊपर दी गई सेटिंग्स वैश्विक हैं। नीचे दी गई ड्रीम डायरी, अल्पकालिक गिनती, और रखरखाव क्रियाएँ एक एजेंट से संबंधित हैं।",
+        rowTitle: "एजेंट",
+      },
+      unsupported: {
+        title: "ड्रीमिंग सेटिंग्स",
+        rowTitle: "इस इंजन के लिए उपलब्ध नहीं",
+        description:
+          "{plugin} प्लगइन मेमोरी स्लॉट का स्वामी है और इसके कॉन्फ़िग स्कीमा में कोई ड्रीमिंग सेक्शन नहीं है, इसलिए इन सेटिंग्स को संग्रहीत नहीं किया जा सकता। इन्हें संपादित करने के लिए Overview टैब पर इंजन बदलें।",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "Threads अनुभाग",
   },
@@ -2277,6 +2432,21 @@ export const hi: TranslationMap = {
       description: "Code Mode को समानांतर में सबएजेंटों के समूहों को व्यवस्थित करने दें।",
       empty: "कोई सक्रिय swarm नहीं।",
       defaultPhase: "बिना चरण",
+    },
+    toolSearch: {
+      title: "टूल खोज",
+      description:
+        "एक सीमित टूल डायरेक्टरी को दृश्यमान रखें और बाकी को खोज के पीछे स्थगित करें, ताकि बड़े MCP और प्लगइन कैटलॉग प्रॉम्प्ट को भरना बंद कर दें।",
+    },
+    localModelLean: {
+      title: "स्थानीय मॉडलों के लिए लीन टूल",
+      description:
+        "उन भारी डिफ़ॉल्ट टूल को हटा दें जिन्हें छोटे स्थानीय मॉडल ठीक से संभाल नहीं पाते, जिससे एक छोटा सेट बचता है जिसे वे विश्वसनीय रूप से उपयोग कर सकते हैं।",
+    },
+    auditMessages: {
+      title: "संदेश ऑडिट मेटाडेटा",
+      description:
+        "ऑडिट लेजर में सीधी बातचीत के लिए सामग्री-रहित मेटाडेटा रिकॉर्ड करें। संदेश सामग्री कभी संग्रहीत नहीं की जाती।",
     },
   },
   aboutPage: {
@@ -3065,6 +3235,7 @@ export const hi: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "अज्ञात त्रुटि",
     cronFailed: "{count} cron जॉब विफल",
     cronOverdue: "{count} cron जॉब की समय-सीमा बीत गई",
     modelAuthExpired: "मॉडल प्रमाणीकरण की समय-सीमा समाप्त: {providers}",
@@ -3160,13 +3331,17 @@ export const hi: TranslationMap = {
       on: "Dreaming चालू",
       off: "Dreaming बंद",
     },
-    restartConfirmation: {
-      title: "परिवर्तन लागू करने के लिए Gateway पुनः आरंभ करें",
-      subtitle: "Dreaming मोड बदलने से gateway पुनः आरंभ होता है।",
-      warning:
-        "यह कार्रवाई Gateway को पुनः आरंभ करेगी और चैट, ऑटोमेशन, और कनेक्टेड चैनलों को अस्थायी रूप से बाधित कर सकती है।",
-      confirm: "पुनः आरंभ की पुष्टि करें",
-      restarting: "पुनः आरंभ हो रहा है…",
+    toggleConfirmation: {
+      subtitle: "ड्रीमिंग एक वैश्विक सेटिंग है; यह इस एजेंट तक सीमित नहीं है।",
+      enableTitle: "सभी एजेंटों के लिए ड्रीमिंग चालू करें",
+      enableDetail:
+        "रात्रिकालीन ड्रीमिंग स्वीप हर कॉन्फ़िगर किए गए एजेंट वर्कस्पेस पर चलेगा, अल्पकालिक रिकॉल को दीर्घकालिक मेमोरी में प्रचारित करेगा। यह तुरंत लागू होता है।",
+      enableConfirm: "ड्रीमिंग चालू करें",
+      disableTitle: "सभी एजेंट के लिए ड्रीमिंग बंद करें",
+      disableDetail:
+        "रात की ड्रीमिंग स्वीप हर कॉन्फ़िगर किए गए एजेंट के लिए रुक जाएगी, केवल इसके लिए नहीं। पहले से लिखी गई यादें बनी रहेंगी; कुछ नया प्रमोट नहीं होगा। यह तुरंत लागू होता है।",
+      disableConfirm: "ड्रीमिंग बंद करें",
+      saving: "सहेजा जा रहा है…",
       failed: "परिवर्तन लागू नहीं किया जा सका। अपना कनेक्शन जांचें और फिर से प्रयास करें।",
     },
     status: {
@@ -3804,6 +3979,11 @@ export const hi: TranslationMap = {
     },
     outputTokens: "{count} आउटपुट टोकन",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",
+    sessionRoute: {
+      chooseTitle: "एक सत्र चुनें",
+      multipleMatches: "एक से अधिक सत्र {shortId} से मेल खाते हैं।",
+      additionalMatches: "खोज परिणाम शेष हैं। लंबे id उपसर्ग का उपयोग करें।",
+    },
     sessionSharing: {
       menu: "थ्रेड साझाकरण",
       current: "थ्रेड दृश्यता: {visibility}",
@@ -3855,6 +4035,15 @@ export const hi: TranslationMap = {
       oneMessage: "{count} संदेश",
       messages: "{count} संदेश",
       activeBranch: "सक्रिय शाखा",
+      gatewayPicker: {
+        menuLabel: "Gateway: {gateway}",
+        primaryTag: "प्राथमिक",
+        setPrimary: "प्राथमिक के रूप में सेट करें…",
+        openSettings: "Gateway सेटिंग्स…",
+        connected: "कनेक्टेड",
+        unreachable: "पहुँच से बाहर",
+        unknown: "अज्ञात स्थिति",
+      },
     },
     board: {
       faceLabel: "थ्रेड फेस",
@@ -4044,7 +4233,9 @@ export const hi: TranslationMap = {
       threads: "थ्रेड",
       groups: "समूह",
       coding: "कोडिंग",
-      groupCatalogSessionsByProject: "प्रोजेक्ट के अनुसार समूहित करें",
+      catalogViewOptions: "व्यू विकल्प",
+      catalogGroupByProject: "प्रोजेक्ट",
+      catalogGroupByPerson: "व्यक्ति",
       openSessionMenu: "Open session menu",
       sortBy: "इसके अनुसार क्रमबद्ध करें",
       sortCreated: "बनाया गया",
@@ -4223,6 +4414,16 @@ export const hi: TranslationMap = {
       renderedMarkdownHint: "त्वरित पढ़ने के लिए सैनिटाइज़ किया गया रिच-टेक्स्ट पूर्वावलोकन।",
       noPreviewableMarkdown: "कोई पूर्वावलोकन योग्य markdown सामग्री नहीं।",
       noContent: "कोई सामग्री उपलब्ध नहीं",
+    },
+    sidebarColumns: {
+      chat: "चैट",
+      discussion: "चर्चा",
+      detail: "विवरण",
+      close: "{panel} बंद करें",
+      drag: "{panel} खींचें",
+      dropOnEmptyLeft: "{panel} को खाली बाएँ साइडबार में ले जाएँ",
+      dropOnEmptyRight: "{panel} को खाली दाएँ साइडबार में ले जाएँ",
+      resize: "{panel} का आकार बदलें",
     },
     thread: {
       search: "संदेश खोजें",
