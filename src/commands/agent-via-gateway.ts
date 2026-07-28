@@ -124,7 +124,10 @@ type AgentSessionModule = typeof import("./agent/session.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
-  return !roster.ownership && !roster.selectionRequired && roster.agentIds.length > 1;
+  return (
+    !roster.selectionRequired &&
+    (roster.ownership === "legacy" || (!roster.ownership && roster.agentIds.length > 1))
+  );
 }
 
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
@@ -894,11 +897,10 @@ async function agentViaGatewayCommand(
     deferUnavailableRemoteContractSession || deferRemoteSessionId;
   // Old gateways own unscoped sentinel routing. A local multi-agent resolver
   // would either reject the compatibility default or scope the wrong transcript.
-  const preserveImplicitCompatibilitySession = Boolean(
+  const preserveImplicitCompatibilitySession =
     remoteRosterUsesCompatibilityDefault &&
     !agentId &&
-    (isUnscopedSessionKeySentinel(explicitSessionKey) || hasImplicitRemoteGlobalTarget),
-  );
+    (isUnscopedSessionKeySentinel(explicitSessionKey) || hasImplicitRemoteGlobalTarget);
 
   const sessionKey =
     preserveUnavailableRemoteLegacyKey || preserveImplicitCompatibilitySession

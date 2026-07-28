@@ -291,26 +291,6 @@ export function consumeSelectedSystemEventEntries(
   return removed;
 }
 
-/** Consumes heartbeat-inspected events from the physical queues they came from. */
-export function consumeSelectedSystemEventEntriesBySource(
-  defaultSessionKey: string,
-  consumedEntries: readonly SystemEvent[],
-): SystemEvent[] {
-  const entriesByQueue = new Map<string, SystemEvent[]>();
-  for (const entry of consumedEntries) {
-    const queueKey = entry.sourceQueueKey ?? defaultSessionKey;
-    const queued = entriesByQueue.get(queueKey);
-    if (queued) {
-      queued.push(entry);
-    } else {
-      entriesByQueue.set(queueKey, [entry]);
-    }
-  }
-  return [...entriesByQueue].flatMap(([queueKey, entries]) =>
-    consumeSelectedSystemEventEntries(queueKey, entries),
-  );
-}
-
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }

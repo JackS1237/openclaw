@@ -1127,6 +1127,44 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("keeps a retained legacy owner implicit for a global sentinel", async () => {
+    callGateway.mockImplementation(async (requestValue) => {
+      const request = requireRecord(requestValue, "gateway request");
+      if (request.method === "agents.list") {
+        return {
+          defaultId: "ops",
+          ownership: "legacy",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: [
+            { id: "ops", name: "Operations" },
+            { id: "research", name: "Research" },
+          ],
+        };
+      }
+      return {
+        runId: "idem-1",
+        status: "ok",
+        result: { payloads: [{ text: "remote" }], meta: { stub: true } },
+      };
+    });
+
+    await withTempStore(
+      async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        const agentRequest = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+        const params = requireRecord(agentRequest.params, "agent params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("global");
+      },
+      {
+        agents: { list: [{ id: "local-main" }] },
+        gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+      },
+    );
+  });
+
   it("scopes an old-gateway global sentinel when --agent is explicit", async () => {
     callGateway.mockImplementation(async (requestValue) => {
       const request = requireRecord(requestValue, "gateway request");

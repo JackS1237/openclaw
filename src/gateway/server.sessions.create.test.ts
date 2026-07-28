@@ -3125,7 +3125,6 @@ test("sessions.create rejects fork while the parent session is active", async ()
 test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
   const workStorePath = storeTemplate.replace("{agentId}", "work");
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;

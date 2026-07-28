@@ -11,14 +11,8 @@ const mocks = vi.hoisted(() => ({
   },
   discoverAuthStorage: vi.fn(),
   discoverModels: vi.fn(),
-  ensureOpenClawModelsJson: vi.fn(async (..._args: unknown[]) => ({
-    agentDir: "/tmp/agent",
-    wrote: false,
-  })),
-  buildPreparedModelCatalogSnapshot: vi.fn(async (..._args: unknown[]) => ({
-    entries: [],
-    routeVariants: [],
-  })),
+  ensureOpenClawModelsJson: vi.fn(async () => ({ agentDir: "/tmp/agent", wrote: false })),
+  buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
   ensureRuntimePluginsLoaded: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   configuredAgentIds: [] as string[],
@@ -30,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./model-catalog.js", () => ({
   buildPreparedModelCatalogSnapshot: (...args: unknown[]) =>
-    mocks.buildPreparedModelCatalogSnapshot(...args),
+    Reflect.apply(mocks.buildPreparedModelCatalogSnapshot, undefined, args),
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
@@ -81,7 +75,8 @@ vi.mock("./model-discovery-context.js", () => ({
 }));
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) => mocks.ensureOpenClawModelsJson(...args),
+  ensureOpenClawModelsJson: (...args: unknown[]) =>
+    Reflect.apply(mocks.ensureOpenClawModelsJson, undefined, args),
 }));
 
 vi.mock("./runtime-plugins.js", () => ({
@@ -910,10 +905,7 @@ describe("prepared model runtime snapshots", () => {
     const agentDir = "/tmp/prepared-model-runtime-implicit-inheritance";
     await publishPreparedModelRuntimeSnapshot({ config, agentDir });
 
-    mocks.mutationListener?.({
-      agentDir: "/tmp/unused-agent",
-      affectsInheritedStores: false,
-    });
+    mocks.mutationListener?.({ agentDir: "/tmp/unused-agent", affectsInheritedStores: false });
 
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
     expect(mocks.discoverAuthStorage).toHaveBeenLastCalledWith(

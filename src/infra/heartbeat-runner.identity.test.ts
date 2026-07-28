@@ -57,6 +57,7 @@ describe("runHeartbeatOnce identity", () => {
         });
         enqueueSystemEvent("main-only wake", { sessionKey: mainEventQueueKey });
         enqueueSystemEvent("historian-only wake", { sessionKey: historianEventQueueKey });
+        enqueueSystemEvent("unowned compatibility wake", { sessionKey: "global" });
         replySpy.mockResolvedValue({ text: "needs attention" });
         const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
@@ -78,6 +79,7 @@ describe("runHeartbeatOnce identity", () => {
         const prompt = JSON.stringify(replySpy.mock.calls[0]?.[0]);
         expect(prompt).toContain("historian-only wake");
         expect(prompt).not.toContain("main-only wake");
+        expect(prompt).not.toContain("unowned compatibility wake");
         expect(sendSlack).toHaveBeenCalledWith(
           "channel:HISTORIAN",
           "needs attention",
@@ -87,6 +89,7 @@ describe("runHeartbeatOnce identity", () => {
         const historianStore = readSessionStoreForTest(historianStorePath);
         expect(historianStore.global).toBeDefined();
         expect(historianStore["global:heartbeat"] !== undefined).toBe(isolatedSession);
+        expect(drainSystemEvents("global")).toEqual(["unowned compatibility wake"]);
         drainSystemEvents(mainEventQueueKey);
         drainSystemEvents(historianEventQueueKey);
       });
