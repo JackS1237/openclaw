@@ -1,0 +1,62 @@
+name: ACP reset timeout exact-head proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - proof/acp-reset-timeout-8d1c
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EXPECTED_SOURCE_SHA: 8d1cddae42d13c322a726508b3469fc32b6151fb
+      PROOF_OUTPUT: /tmp/acp-reset-timeout-proof
+    steps:
+      - name: Check out exact PR source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 8d1cddae42d13c322a726508b3469fc32b6151fb
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source head
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SOURCE_SHA"
+          printf 'Exact source head: %s\n' "$actual_sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24.15.0
+
+      - name: Set up pnpm
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@11.15.1 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Build exact-head Gateway
+        run: node scripts/build-all.mjs
+
+      - name: Run real Gateway to ACPX proof
+        run: node --import tsx scripts/acp-reset-timeout-proof.ts --output-dir "$PROOF_OUTPUT"
+
+      - name: Publish redacted proof artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: acp-reset-timeout-proof-8d1cdd
+          path: /tmp/acp-reset-timeout-proof
+          if-no-files-found: warn
+          retention-days: 7
