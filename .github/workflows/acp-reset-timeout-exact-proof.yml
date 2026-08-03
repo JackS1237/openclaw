@@ -14,13 +14,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      EXPECTED_SOURCE_SHA: 2c8e40f063e882617383c0d7e4c20e350689d09f
+      EXPECTED_SOURCE_SHA: dbf7af40d272e51aaaab1d710060a96c97e84449
       PROOF_OUTPUT: /tmp/acp-reset-timeout-proof
     steps:
       - name: Check out exact PR source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: 2c8e40f063e882617383c0d7e4c20e350689d09f
+          ref: dbf7af40d272e51aaaab1d710060a96c97e84449
           fetch-depth: 1
           persist-credentials: false
 
@@ -56,7 +56,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a0
         with:
-          name: acp-reset-timeout-proof-2c8e
+          name: acp-reset-timeout-proof-dbf7
           path: /tmp/acp-reset-timeout-proof
           if-no-files-found: warn
           retention-days: 7
