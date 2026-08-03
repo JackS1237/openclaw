@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 60
     env:
       EXPECTED_SOURCE_SHA: b06952d046ed2a69a001f6b529d43917fb063b40
-      PROOF_OUTPUT: ${{ runner.temp }}/acp-reset-timeout-proof
+      PROOF_OUTPUT: /tmp/acp-reset-timeout-proof
     steps:
       - name: Check out exact PR source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -57,6 +57,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: acp-reset-timeout-proof-b06952d
-          path: ${{ runner.temp }}/acp-reset-timeout-proof
+          path: /tmp/acp-reset-timeout-proof
           if-no-files-found: warn
           retention-days: 7
