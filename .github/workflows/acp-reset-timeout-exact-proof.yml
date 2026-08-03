@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      EXPECTED_SOURCE_SHA: 8da69137c97ba834e2442e695c1851bf61c8ec0d
+      EXPECTED_SOURCE_SHA: f755810f15219a8b39510b1567340096a39b4608
       PROOF_OUTPUT: /tmp/acp-reset-timeout-proof
     steps:
       - name: Check out exact PR source
@@ -56,7 +56,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a0
         with:
-          name: acp-reset-timeout-proof-8da69137
+          name: acp-reset-timeout-proof-f755810f
           path: /tmp/acp-reset-timeout-proof
           if-no-files-found: warn
           retention-days: 7
