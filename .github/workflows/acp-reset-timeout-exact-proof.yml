@@ -1,6 +1,7 @@
 name: ACP reset timeout exact-head proof
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - proof/acp-reset-timeout-b069
