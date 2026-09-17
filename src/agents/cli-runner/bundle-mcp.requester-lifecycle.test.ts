@@ -84,6 +84,8 @@ it("keeps requester tools callable across static native preflight until session 
   });
   const sessionId = "mixed-native-discovery";
   const sessionKey = `agent:main:${sessionId}`;
+  const runtimeManager = getSessionMcpRuntimeManagerForTesting();
+  const initialRuntimeKeys = runtimeManager.listRuntimeKeys();
   try {
     await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
       await withPluginRuntimeRegistryScope(registry.registry, async () => {
@@ -160,7 +162,7 @@ it("keeps requester tools callable across static native preflight until session 
         }
         expect(sessions.size).toBe(0);
         expect(deleted.toSorted()).toEqual(["requester-session", "static-session"]);
-        expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+        expect(runtimeManager.listRuntimeKeys()).toEqual(initialRuntimeKeys);
       });
     });
   } finally {
