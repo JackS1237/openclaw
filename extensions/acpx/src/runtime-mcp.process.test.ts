@@ -260,8 +260,9 @@ it.each([false, true])(
         requestId: "first",
       });
       const events = (async () => {
-        for await (const _event of turn.events) {
+        for await (const ignoredEventValue of turn.events) {
           // Drain the real adapter while its persistence checkpoint is held.
+          void ignoredEventValue;
         }
       })();
       void events.catch(() => {});
@@ -356,8 +357,9 @@ it("creates a fresh oneshot while an old physical record write is still pending"
       requestId: "old",
     });
     const events = (async () => {
-      for await (const _event of turn.events) {
+      for await (const ignoredEventValue of turn.events) {
         // Drain the real adapter while its physical record checkpoint is held.
+        void ignoredEventValue;
       }
     })();
     void events.catch(() => {});
