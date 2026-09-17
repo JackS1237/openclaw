@@ -156,8 +156,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
 
 /** Detects single-line cron prompts that look like shell commands or command invocations. */
 function isCommandStyleCronMessage(message: string): boolean {
-  const trimmed = message.trim();
-  return !trimmed.includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(trimmed);
+  return !message.trim().includes("\n") && COMMAND_STYLE_CRON_PREFIX.test(message.trim());
 }
 
 function resolveCronBootstrapContextMode(
@@ -838,8 +837,7 @@ function createCronPromptExecutor(
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
             : undefined,
-          // Scheduled run: keep bursty cron overloaded/rate_limit local, while
-          // still sharing real credential/account failures across auth profiles.
+          // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           // Fallback selection is turn-local. Revalidate the stored or
           // requested level without rewriting the durable preference.
@@ -859,6 +857,7 @@ function createCronPromptExecutor(
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,
           scheduledToolPolicy,
+          execSession: params.cronSession.sessionEntry,
           messageActionTurnCapability,
           execOverrides: params.suppressExecNotifyOnExit
             ? {

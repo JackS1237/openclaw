@@ -608,7 +608,8 @@ export function createFullModelCatalogAccess(params: {
   return {
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
-    loadAuth: ({ providerIds, profileIds }) => {
+    loadAuth: async ({ providerIds, profileIds }) => {
+      assertCurrent();
       const cacheKey = [providerIds, profileIds ?? []]
         .map((ids) =>
           [...new Set(ids)].toSorted((left, right) => left.localeCompare(right)).join("\0"),

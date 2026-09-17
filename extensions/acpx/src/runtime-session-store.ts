@@ -8,7 +8,6 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import type { AcpRuntime } from "../runtime-api.js";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
-  hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
   type AcpxProcessLease,
   type AcpxProcessLeaseIdentity,
@@ -52,19 +51,39 @@ export type AcpxLaunchLeaseContext = {
 
 export type AcpxGeneration = {
   id: number;
+  owner: symbol;
   resource: string;
   ensureQueue: KeyedAsyncQueue;
   retired: boolean;
+  activeOperations: number;
+  activeRecordOperations: Map<string, number>;
+  closedRecordIds: Set<string>;
   afterReset: boolean;
   awaitPriorWrites: boolean;
-  record?: AcpLoadedSessionRecord;
+  records: Map<string, NonNullable<AcpLoadedSessionRecord>>;
+  closeCompleted: boolean;
   delegate?: BaseAcpxRuntime;
 };
+export function captureGenerationRecord(
+  generation: AcpxGeneration,
+  record: NonNullable<AcpLoadedSessionRecord>,
+): void {
+  // Closed history remains in the upstream store, not this live-owner cache.
+  // A close can settle before a turn's final checkpoint, so retain its fence
+  // until that physical record's admitted operations have finished.
+  if (record.closed || generation.closedRecordIds.has(record.acpxRecordId)) {
+    generation.records.delete(record.acpxRecordId);
+  } else {
+    generation.records.set(record.acpxRecordId, record);
+  }
+}
+
 export const acpxGenerationKey = Symbol("openclaw.acpxGeneration");
 export type GenerationHandle = OpenClawRuntimeHandle & { [acpxGenerationKey]?: AcpxGeneration };
 export const acpxOperationScope = new AsyncLocalStorage<{
   generation: AcpxGeneration;
   closeRecord?: AcpLoadedSessionRecord;
+  recordId?: string;
 }>();
 
 export function readSessionRecordName(record: unknown): string {
@@ -193,7 +212,7 @@ export function createResetAwareSessionStore(
         return scope.closeRecord;
       }
       const resource = scope?.generation.resource ?? sessionId.trim();
-      const pending = pendingWrites.get(resource);
+      const pending = pendingWrites.get(sessionId.trim());
       if (pending && (scope?.generation.awaitPriorWrites || freshSessionKeys.has(resource))) {
         await Promise.allSettled(pending);
       }
@@ -212,8 +231,8 @@ export function createResetAwareSessionStore(
         ) {
           return undefined;
         }
-        if (scope) {
-          scope.generation.record = record;
+        if (scope && record) {
+          captureGenerationRecord(scope.generation, record);
         }
         if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
           return record;
@@ -232,7 +251,7 @@ export function createResetAwareSessionStore(
         }
         const leasedRecord = withOpenClawLeaseSessionMetadata(record, lease);
         if (scope) {
-          scope.generation.record = leasedRecord;
+          captureGenerationRecord(scope.generation, leasedRecord);
         }
         return leasedRecord;
       };
@@ -242,9 +261,11 @@ export function createResetAwareSessionStore(
       const scope = acpxOperationScope.getStore();
       // Keep the exact old record available for cleanup even when publication is fenced.
       if (scope) {
-        scope.generation.record = record;
+        captureGenerationRecord(scope.generation, record);
       }
-      const resource = scope?.generation.resource ?? readSessionRecordName(record);
+      // Different oneshot records can share a logical session key. Only writes
+      // to the same physical record conflict, including terminal reset markers.
+      const resource = record.acpxRecordId;
       const retiredCloseRecord =
         scope?.generation.retired && record.closed && record.acpx?.reset_on_next_ensure === true
           ? scope.closeRecord
@@ -315,23 +336,6 @@ export function createResetAwareSessionStore(
                   agentStartedAt: undefined,
                 }
               : record;
-            const rootPid = readRecordAgentPid(lifecycleRecord);
-            if (rootPid) {
-              await params.leaseStore.save({
-                leaseId: leaseIdentity.leaseId,
-                gatewayInstanceId: leaseIdentity.gatewayInstanceId,
-                sessionKey: sessionName,
-                wrapperRoot: params.wrapperRoot,
-                wrapperPath: extractGeneratedWrapperPath(leasedCommand),
-                rootPid,
-                ...(existing?.rootPid === rootPid && existing.processGroupId
-                  ? { processGroupId: existing.processGroupId }
-                  : {}),
-                commandHash: hashAcpxProcessCommand(persistedCommand),
-                startedAt: existing?.rootPid === rootPid ? existing.startedAt : Date.now(),
-                state: "open",
-              });
-            }
             recordToSave = withOpenClawLeaseSessionMetadata(
               {
                 ...lifecycleRecord,

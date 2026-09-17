@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RequestedModelUnsupportedError } from "acpx/runtime";
+import {
+  RequestedModelUnsupportedError,
+  type AcpxRuntime as UpstreamRuntime,
+  type AcpRuntimeOptions,
+  type AcpProcessLaunch,
+} from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,31 +19,212 @@ import {
   type AcpRuntimeTurnResult,
 } from "../runtime-api.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
-import { renderAgentCommand, splitCommandParts } from "./command-line.js";
+import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import { AcpxRuntime, testing } from "./runtime.js";
-import {
-  type TestSessionStore,
-  makeEmptySessionStore,
-  DOCUMENTED_OPENCLAW_BRIDGE_COMMAND,
-  CODEX_ACP_COMMAND,
-  CODEX_ACP_WRAPPER_COMMAND,
-  CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE,
-  LOCAL_NODE_MODULES_CODEX_COMMAND,
-  makeTurn,
-  runtimeCommand,
-  recordCommand,
-  makeRuntime,
-  makeLeaseStore,
-  readFirstEnsureSessionInput,
-} from "./runtime.test-support.js";
+import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
+type TestSessionStore = {
+  load(sessionId: string): Promise<Record<string, unknown> | undefined>;
+  save(record: Record<string, unknown>): Promise<void>;
+};
+
+function makeEmptySessionStore(): TestSessionStore {
+  return {
+    load: vi.fn(async () => undefined),
+    save: vi.fn(async () => {}),
+  };
+}
+
+const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
+  "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.10.0";
+const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
+const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
+const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+)}"`;
+
+function makeTurn(
+  input: { requestId: string },
+  overrides: Partial<AcpRuntimeTurn> = {},
+): AcpRuntimeTurn {
+  return {
+    requestId: input.requestId,
+    promptStarted: Promise.resolve(),
+    events: (async function* () {})(),
+    result: Promise.resolve({ status: "completed" }),
+    cancel: vi.fn(async () => {}),
+    closeStream: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+function runtimeCommand(runtime: AcpxRuntime): AcpxAgentCommand {
+  const registry: { resolve(agent: string): AcpxAgentCommand } = Reflect.get(
+    runtime,
+    "scopedAgentRegistry",
+  );
+  return registry.resolve("codex");
+}
+
+async function observeLaunch(
+  runtime: AcpxRuntime,
+  input: { sessionKey?: string; command?: AcpxAgentCommand; pid?: number } = {},
+) {
+  const delegate = Reflect.get(runtime, "delegate");
+  const options: AcpRuntimeOptions = Reflect.get(delegate, "options");
+  const lifecycle = options.processLifecycle;
+  if (!lifecycle?.onBeforeSpawn || !lifecycle.onSpawned) {
+    throw new Error("Expected runtime process lifecycle hooks");
+  }
+  const parts = splitCommandParts(input.command ?? runtimeCommand(runtime));
+  const launch: AcpProcessLaunch = {
+    launchId: "fixture-launch",
+    command: parts[0]!,
+    args: parts.slice(1),
+    cwd: "/tmp",
+    scope: input.sessionKey
+      ? { kind: "runtime-session", sessionKey: input.sessionKey }
+      : { kind: "runtime-probe", agent: "codex" },
+  };
+  await lifecycle.onBeforeSpawn(launch);
+  if (input.pid !== undefined) {
+    await lifecycle.onSpawned({ ...launch, pid: input.pid, startedAt: new Date().toISOString() });
+  }
+}
+
+function recordCommand(command: AcpxAgentCommand) {
+  return {
+    agentCommand: renderAgentCommand(command),
+    ...(typeof command === "string" ? {} : { agentArgv: command }),
+  };
+}
+
+function makeRuntime(
+  baseStore: TestSessionStore,
+  options: Partial<ConstructorParameters<typeof AcpxRuntime>[0]> = {},
+  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
+): {
+  runtime: AcpxRuntime;
+  wrappedStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+  delegate: {
+    cancel: AcpRuntime["cancel"];
+    close: AcpRuntime["close"];
+    ensureSession: AcpRuntime["ensureSession"];
+    startTurn: NonNullable<AcpRuntime["startTurn"]>;
+    getCapabilities: UpstreamRuntime["getCapabilities"];
+    getStatus: NonNullable<AcpRuntime["getStatus"]>;
+    setMode: NonNullable<AcpRuntime["setMode"]>;
+    setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+    isHealthy(): boolean;
+    probeAvailability(): Promise<void>;
+    doctor(): Promise<{ ok: boolean; message: string; details?: string[] }>;
+  };
+} {
+  const runtime = new AcpxRuntime(
+    {
+      cwd: "/tmp",
+      sessionStore: baseStore as unknown as AcpSessionStore,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+      permissionMode: "approve-reads",
+      ...options,
+    },
+    testOptions,
+  );
+
+  return {
+    runtime,
+    wrappedStore: (
+      runtime as unknown as {
+        sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+      }
+    ).sessionStore,
+    delegate: (
+      runtime as unknown as {
+        delegate: {
+          cancel: AcpRuntime["cancel"];
+          close: AcpRuntime["close"];
+          ensureSession: AcpRuntime["ensureSession"];
+          startTurn: NonNullable<AcpRuntime["startTurn"]>;
+          getCapabilities: UpstreamRuntime["getCapabilities"];
+          getStatus: NonNullable<AcpRuntime["getStatus"]>;
+          setMode: NonNullable<AcpRuntime["setMode"]>;
+          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+          isHealthy(): boolean;
+          probeAvailability(): Promise<void>;
+          doctor(): Promise<{ ok: boolean; message: string; details?: string[] }>;
+        };
+      }
+    ).delegate,
+  };
+}
+
+function makeLeaseStore() {
+  const leases = new Map<string, Record<string, unknown>>();
+  return {
+    leases,
+    store: {
+      load: vi.fn(async (leaseId: string) => leases.get(leaseId) as never),
+      listOpen: vi.fn(async () => Array.from(leases.values()) as never),
+      save: vi.fn(async (lease: Record<string, unknown>) => {
+        leases.set(String(lease.leaseId), lease);
+      }),
+      markState: vi.fn(async (leaseId: string, state: string) => {
+        if (state === "closed" || state === "lost") {
+          leases.delete(leaseId);
+          return;
+        }
+        const lease = leases.get(leaseId);
+        if (lease) {
+          lease.state = state;
+        }
+      }),
+    },
+  };
+}
+
+function readFirstEnsureSessionInput(ensure: {
+  mock: { calls: Array<Array<unknown>> };
+}): Parameters<AcpRuntime["ensureSession"]>[0] {
+  const [call] = ensure.mock.calls;
+  if (!call) {
+    throw new Error("Expected ensureSession to be called");
+  }
+  const [input] = call;
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Expected ensureSession to be called with an input object");
+  }
+  return input as Parameters<AcpRuntime["ensureSession"]>[0];
+}
+
 describe("AcpxRuntime fresh reset wrapper", () => {
+  it("projects only core controls while retaining upstream capability metadata", async () => {
+    const { runtime, delegate } = makeRuntime(makeEmptySessionStore());
+    const capabilities: Awaited<ReturnType<UpstreamRuntime["getCapabilities"]>> = {
+      controls: [
+        "session/set_mode",
+        "session/set_model",
+        "session/set_config_option",
+        "session/status",
+      ],
+      configOptionKeys: ["model", "effort"],
+    };
+    vi.spyOn(delegate, "getCapabilities").mockResolvedValue(capabilities);
+    expect(await runtime.getCapabilities()).toEqual({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["model", "effort"],
+    });
+    expect(capabilities.controls).toContain("session/set_model");
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -76,7 +262,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureSpy).not.toHaveBeenCalled();
   });
 
-  it("advertises elicitation modes and forwards the exact handler through every delegate", async () => {
+  it("advertises elicitation modes and forwards the exact elicitation handler for plain and managed sessions", async () => {
     const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
     const handle = (sessionKey: string) => ({
       sessionKey,
@@ -108,7 +294,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       elicitationModes: ["form", "url"],
       mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
     });
-    const bridgeDelegate = bridgeRuntime.bridgeSafeDelegate as typeof bridgeRuntime.delegate;
+    const bridgeDelegate = bridgeRuntime.delegate;
     const bridgeTurn = vi.spyOn(bridgeDelegate, "startTurn").mockImplementation(makeTurn);
     await runThrough(bridgeRuntime.runtime, "agent:openclaw:acp:bridge");
 
@@ -117,13 +303,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
     });
-    const managedDelegate = (
-      managedRuntime.runtime as unknown as {
-        resolveManagedToolsDelegateForSession(target: {
-          sessionKey: string;
-        }): typeof managedRuntime.delegate;
-      }
-    ).resolveManagedToolsDelegateForSession({ sessionKey: "agent:codex:acp:managed" });
+    const managedDelegate = managedRuntime.delegate;
     const managedTurn = vi.spyOn(managedDelegate, "startTurn").mockImplementation(makeTurn);
     await runThrough(managedRuntime.runtime, "agent:codex:acp:managed");
 
@@ -138,105 +318,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     }
   });
 
-  it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-    const { runtime } = makeRuntime(baseStore, {
-      pluginToolsMcpBridgeEnabled: true,
-      openclawToolsMcpBridgeEnabled: true,
-      mcpServers: [
-        {
-          name: "openclaw-plugin-tools",
-          command: "node",
-          args: ["dist/mcp/plugin-tools-serve.js"],
-          env: [],
-        },
-        {
-          name: "openclaw-tools",
-          command: "node",
-          args: ["dist/mcp/openclaw-tools-serve.js"],
-          env: [],
-        },
-      ],
-    });
-
-    const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
-      const delegate = (
-        runtime as unknown as {
-          resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
-        }
-      ).resolveManagedToolsDelegateForSession({ sessionKey }) as {
-        options: {
-          mcpServers?: Array<{
-            env?: Array<{ name: string; value: string }>;
-            name: string;
-          }>;
-        };
-      };
-      return delegate.options.mcpServers?.find((server) => server.name === serverName)?.env;
-    };
-
-    expect(readScopedMcpEnv("agent:worker:main", "openclaw-plugin-tools")).toContainEqual({
-      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
-      value: "agent:worker:main",
-    });
-    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).toContainEqual({
-      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
-      value: "agent:research:main",
-    });
-  });
-
-  it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-    const { runtime } = makeRuntime(baseStore, {
-      openclawToolsMcpBridgeEnabled: true,
-      mcpServers: [
-        {
-          name: "openclaw-tools",
-          command: "node",
-          args: ["dist/mcp/openclaw-tools-serve.js"],
-          env: [],
-        },
-      ],
-    });
-    const exposedRuntime = runtime as unknown as {
-      managedToolsSessionDelegates: Map<string, unknown>;
-      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): unknown;
-    };
-
-    const target = { sessionKey: "agent:worker:main" };
-    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession(target);
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-
-    await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
-
-    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveManagedToolsDelegateForSession(target)).toBe(firstDelegate);
-  });
-
-  it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      openclawToolsMcpBridgeEnabled: true,
-      mcpServers: [
-        {
-          name: "openclaw-tools",
-          command: "node",
-          args: ["dist/mcp/openclaw-tools-serve.js"],
-          env: [],
-        },
-      ],
-    });
-    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
-    const safeProbe = vi
-      .spyOn(bridgeSafeDelegate, "probeAvailability")
-      .mockResolvedValue(undefined);
-
-    await runtime.probeAvailability();
-
-    expect(safeProbe).toHaveBeenCalledTimes(1);
-    expect(defaultProbe).not.toHaveBeenCalled();
-  });
-
   it.each([
     { wrapperRoot: "/tmp/openclaw/acpx", command: CODEX_ACP_WRAPPER_COMMAND },
     {
@@ -247,7 +328,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     },
   ])(
-    "leases generated-wrapper probes before delegate entry ($wrapperRoot)",
+    "leases generated-wrapper probes at the pre-spawn boundary ($wrapperRoot)",
     async ({ wrapperRoot, command }) => {
       const events: string[] = [];
       const baseStore: TestSessionStore = makeEmptySessionStore();
@@ -278,6 +359,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       );
       let launchedCommand = "";
       vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+        await observeLaunch(runtime);
         events.push("probe-entered");
         launchedCommand = renderAgentCommand(runtimeCommand(runtime));
       });
@@ -293,6 +375,47 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expect(leaseStore.store.markState).not.toHaveBeenCalledWith(expect.any(String), "lost");
     },
   );
+
+  it("settles each diagnostic probe cleanup before starting the next probe", async () => {
+    const firstEntered = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    const events: string[] = [];
+    const { runtime, delegate } = makeRuntime(
+      makeEmptySessionStore(),
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: makeLeaseStore().store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        agentRegistry: {
+          resolve: () => CODEX_ACP_WRAPPER_COMMAND,
+          list: () => ["codex"],
+        },
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => {
+            events.push("cleanup");
+            return [];
+          }),
+        },
+      },
+    );
+    vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+      events.push("first-started");
+      firstEntered.resolve();
+      await releaseFirst.promise;
+    });
+    vi.spyOn(delegate, "doctor").mockImplementation(async () => {
+      events.push("second-started");
+      return { ok: true, message: "ready" };
+    });
+    const first = runtime.probeAvailability();
+    await firstEntered.promise;
+    const second = runtime.doctor();
+    releaseFirst.resolve();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first-started", "cleanup", "second-started", "cleanup"]);
+  });
 
   it("reaps a fulfilled probe wrapper that exact live evidence still finds", async () => {
     const baseStore: TestSessionStore = makeEmptySessionStore();
@@ -325,6 +448,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     );
     vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+      await observeLaunch(runtime);
       launchedCommand = renderAgentCommand(runtimeCommand(runtime));
     });
 
@@ -362,7 +486,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         },
       },
     );
-    vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
+    vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+      await observeLaunch(runtime);
+    });
 
     await runtime.probeAvailability();
 
@@ -416,6 +542,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
     const probeLeaseIds = new Set<string>();
     vi.spyOn(delegate, "probeAvailability").mockImplementation(async () => {
+      await observeLaunch(runtime);
       const command = runtimeCommand(runtime);
       const identity = readAcpxProcessLeaseIdentity(command);
       expect(identity).toBeDefined();
@@ -445,6 +572,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     );
     vi.spyOn(updatedDelegate, "probeAvailability").mockImplementation(async () => {
+      await observeLaunch(updatedRuntime);
       const command = runtimeCommand(updatedRuntime);
       const identity = readAcpxProcessLeaseIdentity(command);
       expect(identity).toBeDefined();
@@ -471,6 +599,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     });
     vi.spyOn(delegate, "doctor").mockImplementation(async () => {
+      await observeLaunch(runtime);
       const command = runtimeCommand(runtime);
       expect(command).toContain(OPENCLAW_ACPX_LEASE_ID_ARG);
       throw new Error("probe launch state unknown");
@@ -645,6 +774,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     });
     vi.spyOn(delegate, "ensureSession").mockImplementation(async () => {
+      await observeLaunch(runtime, { sessionKey: "agent:codex:acp:test" });
       const leaseId = String(Array.from(leaseStore.leases.values())[0]?.leaseId);
       await fs.writeFile(
         path.join(wrapperRoot, `codex-acp-wrapper.stderr.${leaseId}.log`),
@@ -1616,7 +1746,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const result = await runtime.getCapabilities?.(input);
 
     expect(getCapabilities).toHaveBeenCalledWith(input);
-    expect(result).toBe(delegateCapabilities);
+    expect(result).toEqual(delegateCapabilities);
   });
 
   it.each([
@@ -1853,6 +1983,71 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/codex-acp")).toBe(false);
   });
 
+  it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+
+    await runtime.prepareFreshSession({
+      sessionKey: "agent:codex:acp:binding:test",
+    });
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore["load"]).toHaveBeenCalledTimes(1);
+
+    await wrappedStore.save({
+      acpxRecordId: "fresh-record",
+      name: "agent:codex:acp:binding:test",
+    } as never);
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore["load"]).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the session fresh after discardPersistentState close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    const close = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+
+    expect(close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore["load"]).toHaveBeenCalledOnce();
+  });
+
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
@@ -1928,6 +2123,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     });
     vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      await observeLaunch(runtime, { sessionKey: input.sessionKey, pid: 777 });
       const command = runtimeCommand(runtime);
       launchCommands.push(renderAgentCommand(command));
       await wrappedStore.save({
@@ -2089,6 +2285,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     });
     vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      await observeLaunch(runtime, { sessionKey: input.sessionKey, pid: 777 });
       const command = runtimeCommand(runtime);
       await wrappedStore.save({ ...savedRecord, ...recordCommand(command), pid: 777 });
       return {
@@ -2142,6 +2339,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     const resolvedCommands: string[] = [];
     vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      await observeLaunch(runtime, { sessionKey: input.sessionKey, pid: 888 });
       const command = runtimeCommand(runtime);
       resolvedCommands.push(renderAgentCommand(command));
       await wrappedStore.save({
@@ -2189,7 +2387,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         save: vi.fn(async () => {}),
       };
       const leaseStore = makeLeaseStore();
-      const { runtime } = makeRuntime(baseStore, {
+      const { runtime, delegate } = makeRuntime(baseStore, {
         openclawGatewayInstanceId: "gateway-test",
         openclawProcessLeaseStore: leaseStore.store,
         openclawToolsMcpBridgeEnabled: true,
@@ -2203,20 +2401,22 @@ describe("AcpxRuntime fresh reset wrapper", () => {
           },
         ],
       });
-      const managedToolsSessionDelegates = (
-        runtime as unknown as {
-          managedToolsSessionDelegates: Map<string, unknown>;
-        }
-      ).managedToolsSessionDelegates;
-      return { runtime, leaseStore, managedToolsSessionDelegates };
+      const calls = [
+        vi.spyOn(delegate, "startTurn").mockImplementation(makeTurn),
+        vi.spyOn(delegate, "setMode").mockResolvedValue(undefined),
+        vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined),
+        vi.spyOn(delegate, "close").mockResolvedValue(undefined),
+      ];
+      return { runtime, leaseStore, calls };
     };
     const expectRejectedWithoutDelegate = async (
       operation: (runtime: AcpxRuntime) => Promise<unknown>,
     ) => {
-      const { runtime, leaseStore, managedToolsSessionDelegates } = createRuntime();
+      const { runtime, leaseStore, calls } = createRuntime();
       await expect(operation(runtime)).rejects.toMatchObject(expectedError);
-      expect(managedToolsSessionDelegates.has(handle.sessionKey)).toBe(false);
-      expect(managedToolsSessionDelegates.size).toBe(0);
+      for (const call of calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
       expect(leaseStore.leases.size).toBe(0);
     };
 
@@ -2226,7 +2426,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await expectRejectedWithoutDelegate((runtime) => runtime.setMode({ handle, mode: "plan" }));
     await expectRejectedWithoutDelegate((runtime) => runtime.close({ handle, reason: "done" }));
 
-    const { runtime, leaseStore, managedToolsSessionDelegates } = createRuntime();
+    const { runtime, leaseStore, calls } = createRuntime();
     const turn = runtime.startTurn({
       handle,
       text: "Reply exactly OK",
@@ -2240,8 +2440,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         expect(outcome.reason).toMatchObject(expectedError);
       }
     }
-    expect(managedToolsSessionDelegates.has(handle.sessionKey)).toBe(false);
-    expect(managedToolsSessionDelegates.size).toBe(0);
+    for (const call of calls) {
+      expect(call).not.toHaveBeenCalled();
+    }
     expect(leaseStore.leases.size).toBe(0);
   });
 
@@ -2276,6 +2477,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       const command = runtimeCommand(runtime);
       resolvedCommands.push(renderAgentCommand(command));
       if (entered === 1) {
+        await observeLaunch(runtime, { sessionKey: input.sessionKey, pid: 777 });
         await wrappedStore.save({
           name: input.sessionKey,
           acpSessionId: "session-1",
@@ -2366,6 +2568,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(savedRecord.pid).toBeUndefined();
     expect(leaseStore.leases.size).toBe(0);
 
+    await observeLaunch(runtime, {
+      sessionKey: "agent:codex:acp:binding:test",
+      command: String(savedRecord.agentCommand),
+      pid: 888,
+    });
     await wrappedStore.save({ ...savedRecord, pid: 888 });
 
     const [lease] = Array.from(leaseStore.leases.values());
@@ -2386,7 +2593,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         list: () => ["codex"],
       },
     });
-    vi.spyOn(delegate, "ensureSession").mockRejectedValue(new Error("launch failed"));
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      await observeLaunch(runtime, { sessionKey: input.sessionKey });
+      throw new Error("launch failed");
+    });
 
     await expect(
       runtime.ensureSession({
@@ -2422,6 +2632,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       },
     });
     vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      await observeLaunch(runtime, { sessionKey: input.sessionKey, pid: 777 });
       const command = runtimeCommand(runtime);
       await wrappedStore.save({
         name: input.sessionKey,
@@ -2445,7 +2656,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.leases.size).toBe(1);
   });
 
-  it("restores a missing lease record from the persisted PID", async () => {
+  it("records the actual reconnect PID instead of inferring ownership from a persisted PID", async () => {
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-live-reconnect ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
@@ -2461,13 +2672,19 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawProcessLeaseStore: leaseStore.store,
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
-    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
-      expect(leaseStore.leases.get("lease-live-reconnect")).toMatchObject({
-        rootPid: 777,
-        sessionKey: "agent:codex:acp:binding:test",
-      });
-      return makeTurn(input);
-    });
+    vi.spyOn(delegate, "startTurn").mockImplementation((input) =>
+      makeTurn(input, {
+        result: (async () => {
+          expect(leaseStore.store.save).not.toHaveBeenCalled();
+          await observeLaunch(runtime, {
+            command: leasedCommand,
+            sessionKey: input.handle.sessionKey,
+            pid: 888,
+          });
+          return { status: "completed" };
+        })(),
+      }),
+    );
 
     await runtime.startTurn({
       handle: {
@@ -2481,12 +2698,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     }).result;
 
     expect(leaseStore.leases.get("lease-live-reconnect")).toMatchObject({
-      rootPid: 777,
+      rootPid: 888,
       state: "open",
     });
   });
 
-  it("restores a pending process lease before startTurn reconnects", async () => {
+  it("keeps reconnect intent until explicit cleanup proves the process is absent", async () => {
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-start-reconnect ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
@@ -2496,18 +2713,31 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
-      expect(leaseStore.leases.get("lease-start-reconnect")).toMatchObject({
-        rootPid: 0,
-        sessionKey: "agent:codex:acp:binding:test",
-      });
-      return makeTurn(input);
-    });
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      { openclawProcessCleanup: { listProcesses: async () => [] } },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+    vi.spyOn(delegate, "startTurn").mockImplementation((input) =>
+      makeTurn(input, {
+        result: (async () => {
+          await observeLaunch(runtime, {
+            command: leasedCommand,
+            sessionKey: input.handle.sessionKey,
+          });
+          expect(leaseStore.leases.get("lease-start-reconnect")).toMatchObject({
+            rootPid: 0,
+            sessionKey: input.handle.sessionKey,
+          });
+          return { status: "completed" };
+        })(),
+      }),
+    );
 
     const turn = runtime.startTurn({
       handle: {
@@ -2521,6 +2751,15 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     await expect(turn.result).resolves.toEqual({ status: "completed" });
+    expect(leaseStore.leases.size).toBe(1);
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "explicit-close",
+    });
     expect(leaseStore.leases.size).toBe(0);
   });
 
@@ -2539,12 +2778,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawProcessLeaseStore: leaseStore.store,
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
-    const expectPendingLease = () => {
-      expect(leaseStore.leases.get("lease-control-reconnect")).toMatchObject({
-        rootPid: 0,
-        sessionKey: "agent:codex:acp:binding:test",
-      });
-    };
+    const expectPendingLease = () => expect(leaseStore.store.save).not.toHaveBeenCalled();
     vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
       expectPendingLease();
       return makeTurn(input);
@@ -2591,7 +2825,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("cancels an abandoned runTurn and retains its lease until canonical cleanup", async () => {
+  it("joins abandoned runTurn cancellation and leaves uncertain process cleanup to close", async () => {
     const leaseId = "lease-abandoned-turn";
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} ${leaseId} ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const sessionKey = "agent:codex:acp:abandoned";
@@ -2600,11 +2834,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       save: vi.fn(async () => {}),
     };
     const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      { openclawProcessCleanup: { listProcesses: async () => [] } },
+    );
+    await observeLaunch(runtime, { sessionKey, command: leasedCommand });
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
     const result = createDeferred<{ status: "cancelled" }>();
     const cancel = vi.fn(async () => {});
     const output = async function* () {
@@ -2640,6 +2880,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expect(leaseStore.leases.has(leaseId)).toBe(true);
       result.resolve({ status: "cancelled" });
       await closing;
+      expect(leaseStore.leases.size).toBe(1);
+      await runtime.close({
+        handle: { sessionKey, backend: "acpx", runtimeSessionName: sessionKey },
+        reason: "explicit-close",
+      });
       expect(leaseStore.leases.size).toBe(0);
     } finally {
       result.resolve({ status: "cancelled" });
@@ -2678,6 +2923,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
     vi.spyOn(delegate, "setMode").mockImplementation(async () => {
+      await observeLaunch(runtime, {
+        command: leasedCommand,
+        sessionKey: "agent:codex:acp:binding:test",
+        pid: 888,
+      });
       await wrappedStore.save({ ...savedRecord, pid: 888 });
     });
 
@@ -2698,315 +2948,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("keeps a shared pending lease until the last concurrent operation finishes", async () => {
-    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-concurrent-operations ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        name: "agent:codex:acp:binding:test",
-        agentCommand: leasedCommand,
-      })),
-      save: vi.fn(async () => {}),
-    };
-    const leaseStore = makeLeaseStore();
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    const { promise: turnStarted, resolve: markTurnStarted } = createDeferred<void>();
-    const { promise: turnBlocked, resolve: releaseTurn } = createDeferred<void>();
-    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
-      markTurnStarted();
-      return makeTurn(input, { result: turnBlocked.then(() => ({ status: "completed" })) });
-    });
-    vi.spyOn(delegate, "setMode").mockResolvedValue(undefined);
-    const handle = {
-      sessionKey: "agent:codex:acp:binding:test",
-      backend: "acpx" as const,
-      runtimeSessionName: "agent:codex:acp:binding:test",
-    };
-    const turn = runtime.startTurn({
-      handle,
-      text: "Reply exactly OK",
-      mode: "prompt",
-      requestId: "turn-concurrent-operations",
-    }).result;
-    await turnStarted;
-
-    await runtime.setMode({ handle, mode: "plan" });
-
-    expect(leaseStore.leases.get("lease-concurrent-operations")).toMatchObject({
-      rootPid: 0,
-    });
-    releaseTurn();
-    await turn;
-    expect(leaseStore.leases.size).toBe(0);
-  });
-
-  it("retires an old lease after the session record switches identity", async () => {
-    const oldCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-old-operation ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    const newCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-new-session ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    let savedRecord: Record<string, unknown> = {
-      name: "agent:codex:acp:binding:test",
-      agentCommand: oldCommand,
-      pid: 777,
-    };
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => savedRecord),
-      save: vi.fn(async (record) => {
-        savedRecord = record;
-      }),
-    };
-    const leaseStore = makeLeaseStore();
-    leaseStore.leases.set("lease-old-operation", {
-      leaseId: "lease-old-operation",
-      gatewayInstanceId: "gateway-test",
-      sessionKey: "agent:codex:acp:binding:test",
-      wrapperRoot: "/tmp/openclaw/acpx",
-      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      rootPid: 777,
-      commandHash: "hash",
-      startedAt: 1,
-      state: "open",
-    });
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    const { promise: turnStarted, resolve: markTurnStarted } = createDeferred<void>();
-    const { promise: turnBlocked, resolve: releaseTurn } = createDeferred<void>();
-    vi.spyOn(delegate, "startTurn").mockImplementation((input) => {
-      markTurnStarted();
-      return makeTurn(input, { result: turnBlocked.then(() => ({ status: "completed" })) });
-    });
-    const handle = {
-      sessionKey: "agent:codex:acp:binding:test",
-      backend: "acpx" as const,
-      runtimeSessionName: "agent:codex:acp:binding:test",
-    };
-    const turn = runtime.startTurn({
-      handle,
-      text: "Reply exactly OK",
-      mode: "prompt",
-      requestId: "turn-old-operation",
-    }).result;
-    await turnStarted;
-
-    savedRecord = {
-      name: handle.sessionKey,
-      agentCommand: newCommand,
-      pid: 888,
-    };
-    releaseTurn();
-    await turn;
-
-    expect(leaseStore.leases.has("lease-old-operation")).toBe(false);
-    expect(leaseStore.store.markState).toHaveBeenCalledWith("lease-old-operation", "lost");
-  });
-
-  it("keeps launch ownership while a concurrent reconnect operation is active", async () => {
-    let savedRecord: Record<string, unknown> | undefined;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => savedRecord),
-      save: vi.fn(async (record) => {
-        savedRecord = record;
-      }),
-    };
-    const leaseStore = makeLeaseStore();
-    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-      agentRegistry: {
-        resolve: (agentName: string) =>
-          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-        list: () => ["codex"],
-      },
-    });
-    const { promise: launchPersisted, resolve: markLaunchPersisted } = createDeferred<void>();
-    const { promise: launchBlocked, resolve: failLaunch } = createDeferred<void>();
-    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
-      const command = runtimeCommand(runtime);
-      await wrappedStore.save({
-        name: input.sessionKey,
-        ...recordCommand(command),
-        cwd: "/tmp",
-      });
-      markLaunchPersisted();
-      await launchBlocked;
-      throw new Error("launch failed");
-    });
-    const { promise: controlStarted, resolve: markControlStarted } = createDeferred<void>();
-    const { promise: controlBlocked, resolve: releaseControl } = createDeferred<void>();
-    vi.spyOn(delegate, "setMode").mockImplementation(async () => {
-      markControlStarted();
-      await controlBlocked;
-    });
-    const sessionKey = "agent:codex:acp:binding:test";
-    const handle = {
-      sessionKey,
-      backend: "acpx" as const,
-      runtimeSessionName: sessionKey,
-    };
-    const launch = runtime.ensureSession({
-      sessionKey,
-      agent: "codex",
-      mode: "persistent",
-    });
-    await launchPersisted;
-    const control = runtime.setMode({ handle, mode: "plan" });
-    await controlStarted;
-
-    failLaunch();
-    await expect(launch).rejects.toThrow("launch failed");
-
-    const leaseId = String(savedRecord?.openclawLeaseId);
-    expect(leaseStore.leases.get(leaseId)).toMatchObject({
-      leaseId,
-      rootPid: 0,
-    });
-    releaseControl();
-    await control;
-    expect(leaseStore.leases.get(leaseId)).toMatchObject({ rootPid: 0, state: "open" });
-  });
-
-  it("serializes last-owner retirement with the next lease acquisition", async () => {
-    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-retirement-race ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        name: "agent:codex:acp:binding:test",
-        agentCommand: leasedCommand,
-      })),
-      save: vi.fn(async () => {}),
-    };
-    const leaseStore = makeLeaseStore();
-    let leaseLoads = 0;
-    const { promise: retirementStarted, resolve: markRetirementStarted } = createDeferred<void>();
-    const { promise: retirementBlocked, resolve: releaseRetirement } = createDeferred<void>();
-    leaseStore.store.load.mockImplementation(async (leaseId: string) => {
-      leaseLoads += 1;
-      if (leaseLoads === 2) {
-        markRetirementStarted();
-        await retirementBlocked;
-      }
-      return leaseStore.leases.get(leaseId) as never;
-    });
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-    });
-    vi.spyOn(delegate, "startTurn").mockImplementation(makeTurn);
-    const setMode = vi.spyOn(delegate, "setMode").mockResolvedValue(undefined);
-    const handle = {
-      sessionKey: "agent:codex:acp:binding:test",
-      backend: "acpx" as const,
-      runtimeSessionName: "agent:codex:acp:binding:test",
-    };
-    const turn = runtime.startTurn({
-      handle,
-      text: "Reply exactly OK",
-      mode: "prompt",
-      requestId: "turn-retirement-race",
-    }).result;
-    await retirementStarted;
-
-    const control = runtime.setMode({ handle, mode: "plan" });
-    await Promise.resolve();
-    expect(setMode).not.toHaveBeenCalled();
-    releaseRetirement();
-
-    await turn;
-    await control;
-    expect(setMode).toHaveBeenCalledTimes(1);
-    expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
-    expect(leaseStore.leases.size).toBe(0);
-  });
-
-  it("rechecks a reusable sidecar after the prior owner retires it", async () => {
-    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-reusable-race ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
-    const sessionKey = "agent:codex:acp:binding:test";
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        name: sessionKey,
-        acpSessionId: "session-1",
-        agentCommand: leasedCommand,
-        cwd: "/tmp",
-      })),
-      save: vi.fn(async () => {}),
-    };
-    const leaseStore = makeLeaseStore();
-    leaseStore.leases.set("lease-reusable-race", {
-      leaseId: "lease-reusable-race",
-      gatewayInstanceId: "gateway-test",
-      sessionKey,
-      wrapperRoot: "/tmp/openclaw/acpx",
-      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-      rootPid: 0,
-      commandHash: "hash",
-      startedAt: 1,
-      state: "open",
-    });
-    let leaseLoads = 0;
-    const { promise: retirementStarted, resolve: markRetirementStarted } = createDeferred<void>();
-    const { promise: retirementBlocked, resolve: releaseRetirement } = createDeferred<void>();
-    leaseStore.store.load.mockImplementation(async (leaseId: string) => {
-      leaseLoads += 1;
-      if (leaseLoads === 2) {
-        markRetirementStarted();
-        await retirementBlocked;
-      }
-      return leaseStore.leases.get(leaseId) as never;
-    });
-    const { runtime, delegate } = makeRuntime(baseStore, {
-      openclawGatewayInstanceId: "gateway-test",
-      openclawProcessLeaseStore: leaseStore.store,
-      openclawWrapperRoot: "/tmp/openclaw/acpx",
-      agentRegistry: {
-        resolve: (agentName: string) =>
-          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
-        list: () => ["codex"],
-      },
-    });
-    vi.spyOn(delegate, "startTurn").mockImplementation(makeTurn);
-    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
-      expect(leaseStore.leases.get("lease-reusable-race")).toMatchObject({
-        rootPid: 0,
-        sessionKey,
-      });
-      return {
-        sessionKey: input.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: input.sessionKey,
-      };
-    });
-    const handle = {
-      sessionKey,
-      backend: "acpx" as const,
-      runtimeSessionName: sessionKey,
-    };
-    const turn = runtime.startTurn({
-      handle,
-      text: "Reply exactly OK",
-      mode: "prompt",
-      requestId: "turn-reusable-race",
-    }).result;
-    await retirementStarted;
-
-    const ensure = runtime.ensureSession({
-      sessionKey,
-      agent: "codex",
-      mode: "persistent",
-    });
-    releaseRetirement();
-
-    await turn;
-    await ensure;
-    expect(leaseStore.store.save).toHaveBeenCalledTimes(1);
-    expect(leaseStore.leases.size).toBe(0);
-  });
-
   it("keeps close pending leases when cleanup fails", async () => {
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close-failure ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const baseStore: TestSessionStore = {
@@ -3021,6 +2962,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawGatewayInstanceId: "gateway-test",
       openclawProcessLeaseStore: leaseStore.store,
       openclawWrapperRoot: "/tmp/openclaw/acpx",
+    });
+    await observeLaunch(runtime, {
+      command: leasedCommand,
+      sessionKey: "agent:codex:acp:binding:test",
     });
     vi.spyOn(delegate, "close").mockResolvedValue(undefined);
     vi.spyOn(
@@ -3580,279 +3525,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(cancel).toHaveBeenCalledWith(input);
     expect(listProcesses).not.toHaveBeenCalled();
     expect(killed).toStrictEqual([]);
-  });
-
-  it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:codex:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:openclaw:acp:test",
-      agent: "openclaw",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("bridge");
-    expect(bridgeEnsure).toHaveBeenCalledOnce();
-    expect(defaultEnsure).not.toHaveBeenCalled();
-  });
-
-  it("routes non-openclaw sessions through the default delegate", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:codex:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:test",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("default");
-    expect(defaultEnsure).toHaveBeenCalledOnce();
-    expect(bridgeEnsure).not.toHaveBeenCalled();
-  });
-
-  it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-    });
-    const defaultStatus = vi.spyOn(delegate, "getStatus").mockResolvedValue({
-      summary: "default",
-    });
-    const bridgeStatus = vi.spyOn(bridgeSafeDelegate, "getStatus").mockResolvedValue({
-      summary: "bridge",
-    });
-    const handle: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]["handle"] = {
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "openclaw-session-handle",
-    };
-
-    const status = await runtime.getStatus({ handle });
-
-    expect(status.summary).toBe("bridge");
-    expect(bridgeStatus).toHaveBeenCalledWith({ handle });
-    expect(defaultStatus).not.toHaveBeenCalled();
-  });
-
-  it("keeps MCP-enabled routing when the openclaw agent is overridden to a non-bridge adapter", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      agentRegistry: {
-        resolve: (agentName: string) => (agentName === "openclaw" ? "codex" : agentName),
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:openclaw:acp:test",
-      agent: "openclaw",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("default");
-    expect(defaultEnsure).toHaveBeenCalledOnce();
-    expect(bridgeEnsure).not.toHaveBeenCalled();
-  });
-
-  it("uses the bridge-safe delegate for any agent mapped to the openclaw bridge command", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      agentRegistry: {
-        resolve: (agentName: string) => (agentName === "codex" ? "openclaw acp" : agentName),
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:codex:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:codex:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:test",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("bridge");
-    expect(bridgeEnsure).toHaveBeenCalledOnce();
-    expect(defaultEnsure).not.toHaveBeenCalled();
-  });
-
-  it("uses the bridge-safe delegate for documented env-wrapped openclaw bridge commands", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      agentRegistry: {
-        resolve: (agentName: string) =>
-          agentName === "openclaw" ? DOCUMENTED_OPENCLAW_BRIDGE_COMMAND : agentName,
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:openclaw:acp:test",
-      agent: "openclaw",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("bridge");
-    expect(bridgeEnsure).toHaveBeenCalledOnce();
-    expect(defaultEnsure).not.toHaveBeenCalled();
-  });
-
-  it("uses the bridge-safe delegate for local node openclaw entrypoints", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      agentRegistry: {
-        resolve: (agentName: string) =>
-          agentName === "openclaw" ? "env OPENCLAW_HIDE_BANNER=1 node openclaw.mjs acp" : agentName,
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "default",
-    });
-    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
-      sessionKey: "agent:openclaw:acp:test",
-      backend: "acpx",
-      runtimeSessionName: "bridge",
-    });
-
-    const result = await runtime.ensureSession({
-      sessionKey: "agent:openclaw:acp:test",
-      agent: "openclaw",
-      mode: "persistent",
-    });
-
-    expect(result.runtimeSessionName).toBe("bridge");
-    expect(bridgeEnsure).toHaveBeenCalledOnce();
-    expect(defaultEnsure).not.toHaveBeenCalled();
-  });
-
-  it("routes follow-up calls by persisted agent command before current config", async () => {
-    const baseStore: TestSessionStore = {
-      load: vi.fn(async () => ({
-        acpxRecordId: "agent:openclaw:acp:test",
-        agentCommand: DOCUMENTED_OPENCLAW_BRIDGE_COMMAND,
-      })),
-      save: vi.fn(async () => {}),
-    };
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      agentRegistry: {
-        resolve: (agentName: string) => (agentName === "openclaw" ? "codex" : agentName),
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultStatus = vi.spyOn(delegate, "getStatus").mockResolvedValue({
-      summary: "default",
-    });
-    const bridgeStatus = vi.spyOn(bridgeSafeDelegate, "getStatus").mockResolvedValue({
-      summary: "bridge",
-    });
-
-    const status = await runtime.getStatus({
-      handle: {
-        sessionKey: "agent:openclaw:acp:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:openclaw:acp:test",
-      },
-    });
-
-    expect(status.summary).toBe("bridge");
-    expect(bridgeStatus).toHaveBeenCalledOnce();
-    expect(defaultStatus).not.toHaveBeenCalled();
-  });
-
-  it("probes through the bridge-safe delegate when probeAgent resolves to openclaw bridge", async () => {
-    const baseStore: TestSessionStore = makeEmptySessionStore();
-
-    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
-      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
-      probeAgent: "  OpenClaw  ",
-      agentRegistry: {
-        resolve: (agentName: string) =>
-          agentName === "openclaw" ? DOCUMENTED_OPENCLAW_BRIDGE_COMMAND : agentName,
-        list: () => ["codex", "openclaw"],
-      },
-    });
-    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
-    const bridgeProbe = vi
-      .spyOn(bridgeSafeDelegate, "probeAvailability")
-      .mockResolvedValue(undefined);
-    vi.spyOn(delegate, "isHealthy").mockReturnValue(false);
-    vi.spyOn(bridgeSafeDelegate, "isHealthy").mockReturnValue(true);
-
-    await runtime.probeAvailability();
-
-    expect(runtime.isHealthy()).toBe(true);
-    expect(bridgeProbe).toHaveBeenCalledOnce();
-    expect(defaultProbe).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

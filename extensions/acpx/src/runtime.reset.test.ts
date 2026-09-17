@@ -1,13 +1,8 @@
 import { AcpxRuntime as BaseAcpxRuntime } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpRuntime } from "../runtime-api.js";
 import type { AcpSessionStore } from "./runtime.js";
-import {
-  type TestSessionStore,
-  makeRuntime,
-  makeManagedDelegateRuntime,
-} from "./runtime.test-support.js";
+import { type TestSessionStore, makeRuntime, makeManagedRuntime } from "./runtime.test-support.js";
 
 describe("AcpxRuntime reset generation custody", () => {
   beforeEach(() => vi.restoreAllMocks());
@@ -97,7 +92,7 @@ describe("AcpxRuntime reset generation custody", () => {
         persisted = record;
       }),
     };
-    const { runtime, wrappedStore } = makeRuntime(baseStore, {
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore, {
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [
         {
@@ -108,15 +103,8 @@ describe("AcpxRuntime reset generation custody", () => {
         },
       ],
     });
-    const exposedRuntime = runtime as unknown as {
-      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveManagedToolsDelegateForSession(target: { sessionKey: string }): {
-        close: AcpRuntime["close"];
-      };
-    };
-    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({ sessionKey });
     let releaseClose: (() => void) | undefined;
-    vi.spyOn(scopedDelegate, "close").mockImplementation(async () => {
+    vi.spyOn(delegate, "close").mockImplementation(async () => {
       await new Promise<void>((resolve) => {
         releaseClose = resolve;
       });
@@ -147,7 +135,6 @@ describe("AcpxRuntime reset generation custody", () => {
 
     expect(persisted).toMatchObject({ acpSessionId: "fresh-session" });
     expect(await wrappedStore.load(sessionKey)).toMatchObject({ acpSessionId: "fresh-session" });
-    expect(exposedRuntime.managedToolsSessionDelegates.has(sessionKey)).toBe(false);
   });
 
   it("keeps a background discard close attached to the pre-reset record", async () => {
@@ -218,14 +205,10 @@ describe("AcpxRuntime reset generation custody", () => {
   });
 
   it.each(["success", "cleanup-failure", "close-failure"] as const)(
-    "retires only successfully closed managed delegates after %s",
+    "preserves persisted session ownership through %s",
     async (outcome) => {
-      const { runtime, target, resource, delegates, baseStore, sleep, ensure } =
-        makeManagedDelegateRuntime();
+      const { runtime, target, baseStore, sleep, ensure } = makeManagedRuntime();
       const handle = await ensure();
-      const first = delegates.get(resource);
-      expect(first).toBeDefined();
-      expect(delegates.has(target.sessionKey)).toBe(false);
       if (outcome === "cleanup-failure") {
         sleep.mockRejectedValueOnce(new Error("cleanup failed"));
       }
@@ -240,45 +223,40 @@ describe("AcpxRuntime reset generation custody", () => {
           outcome === "cleanup-failure" ? "cleanup failed" : "close failed",
         );
       }
-      expect(delegates.size).toBe(outcome === "close-failure" ? 1 : 0);
       expect((await baseStore.load()).closed).toBe(outcome !== "close-failure");
       const next = await ensure();
-      if (outcome === "close-failure") {
-        expect(delegates.get(resource)).toBe(first);
-      } else {
-        expect(delegates.get(resource)).not.toBe(first);
-      }
       expect(next.sessionKey).toBe(target.sessionKey);
       expect(next.agentId).toBe(target.agentId);
+      expect(next.backendSessionId).toBe(handle.backendSessionId);
       await runtime.close({ handle: next, reason: "closed" });
-      expect(delegates.size).toBe(0);
+      await runtime.shutdown();
     },
   );
 
   it.each([false, true])(
-    "does not evict a replacement after overlapping closes (reset: %s)",
+    "keeps successor persistence when overlapping predecessor closes settle (prior reset: %s)",
     async (afterReset) => {
-      const { runtime, target, resource, delegates, baseStore, ensure } =
-        makeManagedDelegateRuntime();
+      const { runtime, target, baseStore, ensure } = makeManagedRuntime();
       let handle = await ensure();
-      if (afterReset) {
-        await runtime.prepareFreshSession(target);
-        const freshRecord = { ...(await baseStore.load()), acpSessionId: "fresh-session" };
-        const wrappedStore = Reflect.get(runtime, "sessionStore") as AcpSessionStore;
-        // Isolate adapter creation; both overlapping closes use the real upstream runtime.
+      const wrappedStore = Reflect.get(runtime, "sessionStore") as AcpSessionStore;
+      async function ensureFresh(id: string) {
+        const freshRecord = { ...(await baseStore.load()), acpSessionId: id, closed: false };
         const create = vi
           .spyOn(BaseAcpxRuntime.prototype, "ensureSession")
           .mockImplementationOnce(async () => {
             await wrappedStore.save(freshRecord);
-            return { ...handle, backendSessionId: "fresh-session" };
+            return { ...handle, backendSessionId: id };
           });
         try {
-          handle = await ensure();
+          return await ensure();
         } finally {
           create.mockRestore();
         }
       }
-      const first = delegates.get(resource);
+      if (afterReset) {
+        await runtime.prepareFreshSession(target);
+        handle = await ensureFresh("prior-reset-session");
+      }
       const closingStarted = createDeferred<void>();
       const releaseClose = createDeferred<void>();
       const save = baseStore.save.getMockImplementation()!;
@@ -288,23 +266,143 @@ describe("AcpxRuntime reset generation custody", () => {
         await save(record);
       });
       const firstClose = runtime.close({ handle, reason: "older close" });
+      let secondClose: Promise<void> | undefined;
       try {
         await closingStarted.promise;
-        await runtime.close({ handle, reason: "concurrent close" });
-        expect(delegates.size).toBe(0);
-        const next = await ensure();
-        const replacement = delegates.get(resource);
-        expect(replacement).toBeDefined();
-        expect(replacement).not.toBe(first);
+        secondClose = runtime.close({ handle, reason: "concurrent close" });
+        await runtime.prepareFreshSession(target);
+        const successor = ensureFresh("successor-session");
+        // The storage writer remains serialized, but the retired runtime does
+        // not own the successor's queue or the final persisted session.
         releaseClose.resolve();
-        await firstClose;
-        expect(delegates.get(resource)).toBe(replacement);
+        const next = await successor;
+        await Promise.all([firstClose, secondClose]);
+        expect(next.backendSessionId).toBe("successor-session");
+        expect((await baseStore.load()).acpSessionId).toBe("successor-session");
+        expect((await baseStore.load()).closed).toBe(false);
         await runtime.close({ handle: next, reason: "final close" });
-        expect(delegates.size).toBe(0);
+        await runtime.shutdown();
       } finally {
         releaseClose.resolve();
-        await firstClose;
+        await Promise.allSettled([firstClose, ...(secondClose ? [secondClose] : [])]);
       }
     },
   );
+  it("keeps ordinary close and reopen off the blocked pre-reset runtime", async () => {
+    const { runtime, target, baseStore, ensure } = makeManagedRuntime();
+    const handle = await ensure();
+    const original = Reflect.get(runtime, "delegate") as BaseAcpxRuntime;
+    await runtime.prepareFreshSession(target);
+    const wrappedStore = Reflect.get(runtime, "sessionStore") as AcpSessionStore;
+    const freshRecord = { ...(await baseStore.load()), acpSessionId: "isolated-successor" };
+    const create = vi
+      .spyOn(BaseAcpxRuntime.prototype, "ensureSession")
+      .mockImplementationOnce(async () => {
+        await wrappedStore.save(freshRecord);
+        return { ...handle, backendSessionId: freshRecord.acpSessionId };
+      });
+    const successor = await ensure();
+    const successorRuntime = create.mock.contexts[0];
+    create.mockRestore();
+    if (!(successorRuntime instanceof BaseAcpxRuntime)) {
+      throw new Error("Fresh session did not use an ACPX runtime");
+    }
+    const shutdown = vi.spyOn(successorRuntime, "shutdown");
+    const blocked = vi
+      .spyOn(original, "ensureSession")
+      .mockRejectedValue(new Error("pre-reset runtime is still blocked"));
+    try {
+      await runtime.close({ handle: successor, reason: "ordinary close" });
+      expect(shutdown).toHaveBeenCalledOnce();
+      await shutdown.mock.results[0]!.value;
+      const reopened = await ensure();
+      expect(reopened.backendSessionId).toBe(successor.backendSessionId);
+      expect(blocked).not.toHaveBeenCalled();
+      await runtime.close({ handle: reopened, reason: "final close" });
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  it("does not allocate a reset runtime after shutdown during a close snapshot", async () => {
+    const { runtime, target, baseStore, ensure } = makeManagedRuntime();
+    const previous = await ensure();
+    await runtime.prepareFreshSession(target);
+    // A persisted handle has no process-local generation symbol.
+    const handle = {
+      ...target,
+      backend: previous.backend,
+      runtimeSessionName: previous.runtimeSessionName,
+      backendSessionId: previous.backendSessionId,
+    };
+    const record = await baseStore.load();
+    const snapshotStarted = createDeferred<void>();
+    const releaseSnapshot = createDeferred<void>();
+    baseStore.load.mockImplementationOnce(async () => {
+      snapshotStarted.resolve();
+      await releaseSnapshot.promise;
+      return record;
+    });
+    const close = vi.spyOn(BaseAcpxRuntime.prototype, "close");
+    const closing = runtime.close({ handle, reason: "discard", discardPersistentState: true });
+    void closing.catch(() => {});
+    try {
+      await snapshotStarted.promise;
+      await runtime.shutdown();
+      releaseSnapshot.resolve();
+      await expect(closing).rejects.toThrow("ACP runtime is shut down");
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      releaseSnapshot.resolve();
+      await Promise.allSettled([closing]);
+      await runtime.shutdown();
+    }
+  });
+
+  it("waits for every post-reset runtime during service shutdown and rejects new work", async () => {
+    const { runtime, target, baseStore, ensure } = makeManagedRuntime();
+    const handle = await ensure();
+    await runtime.prepareFreshSession(target);
+    const wrappedStore = Reflect.get(runtime, "sessionStore") as AcpSessionStore;
+    const freshRecord = { ...(await baseStore.load()), acpSessionId: "shutdown-successor" };
+    const create = vi
+      .spyOn(BaseAcpxRuntime.prototype, "ensureSession")
+      .mockImplementationOnce(async () => {
+        await wrappedStore.save(freshRecord);
+        return { ...handle, backendSessionId: freshRecord.acpSessionId };
+      });
+    await ensure();
+    const successorRuntime = create.mock.contexts[0];
+    create.mockRestore();
+    const successorShutdownStarted = createDeferred<void>();
+    const releaseShutdown = createDeferred<void>();
+    const shutdown = vi
+      .spyOn(BaseAcpxRuntime.prototype, "shutdown")
+      .mockImplementation(async function (this: BaseAcpxRuntime) {
+        if (this === successorRuntime) {
+          successorShutdownStarted.resolve();
+          await releaseShutdown.promise;
+        }
+      });
+    let settled = false;
+    const closing = runtime.shutdown().then(() => {
+      settled = true;
+    });
+    try {
+      await Promise.race([
+        successorShutdownStarted.promise,
+        closing.then(() => {
+          throw new Error("Shutdown settled before reaching the successor runtime");
+        }),
+      ]);
+      expect(settled).toBe(false);
+      await expect(ensure()).rejects.toThrow("ACP runtime is shut down");
+      releaseShutdown.resolve();
+      await closing;
+      expect(shutdown).toHaveBeenCalledTimes(2);
+    } finally {
+      releaseShutdown.resolve();
+      await closing;
+    }
+  });
 });

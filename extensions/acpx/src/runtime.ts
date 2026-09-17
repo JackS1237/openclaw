@@ -20,6 +20,8 @@ import {
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
   type AcpRuntimeOptions,
+  type AcpProcessLaunch,
+  type AcpProcessStarted,
   type AcpRuntimeStatus,
   type AcpRuntimeTurnResult,
   type SessionAgentOptions,
@@ -27,7 +29,12 @@ import {
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeCapabilities,
+  type AcpRuntimeErrorCode,
+} from "../runtime-api.js";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
@@ -35,7 +42,6 @@ import {
   hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
   withAcpxLeaseArgs,
-  type AcpxProcessLeaseIdentity,
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
 import {
@@ -44,6 +50,7 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import { AcpxGenerationRegistry } from "./runtime-generations.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
   type AcpSessionStore,
@@ -52,6 +59,7 @@ import {
   type ResetAwareSessionStore,
   type AcpxLaunchLeaseContext,
   type AcpxGeneration,
+  captureGenerationRecord,
   acpxGenerationKey,
   type GenerationHandle,
   acpxOperationScope,
@@ -84,11 +92,11 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
-type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
 type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
-type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+type AcpxMcpServers = Extract<NonNullable<AcpRuntimeOptions["mcpServers"]>, unknown[]>;
+type AcpxMcpServer = AcpxMcpServers[number];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
@@ -461,18 +469,13 @@ function resolveAgentCommand(params: {
   return splitCommandParts(params.agentRegistry.resolve(normalizedAgentName));
 }
 
-function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
-  const { mcpServers } = options;
-  return Array.isArray(mcpServers) && mcpServers.length > 0;
-}
-
 function withManagedToolsMcpSessionEnv(params: {
   pluginToolsEnabled: boolean;
   openclawToolsEnabled: boolean;
-  mcpServers: AcpRuntimeOptions["mcpServers"];
+  mcpServers: AcpxMcpServers;
   sessionKey: string;
   agentId?: string;
-}): AcpRuntimeOptions["mcpServers"] {
+}): AcpxMcpServers {
   const sessionKey = params.sessionKey.trim();
   if (
     (!params.pluginToolsEnabled && !params.openclawToolsEnabled) ||
@@ -519,26 +522,20 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     command: AcpxAgentCommand | undefined;
   }>();
   private readonly delegate: BaseAcpxRuntime;
-  private readonly bridgeSafeDelegate: BaseAcpxRuntime;
-  private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly generationRegistry: AcpxGenerationRegistry;
+  private readonly createDelegate: () => BaseAcpxRuntime;
+  private readonly sessionScope = new AsyncLocalStorage<{ sessionKey: string; agentId?: string }>();
+  private readonly probeQueue = new KeyedAsyncQueue();
   private readonly probeAgent: string;
   private readonly probeCommand: AcpxAgentCommand | undefined;
-  private readonly delegateOptions: AcpRuntimeOptions;
-  private readonly delegateTestOptions: BaseAcpxRuntimeTestOptions;
   private readonly pluginToolsMcpBridgeEnabled: boolean;
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
-  private readonly managedToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
-  private readonly generations = new Map<string, AcpxGeneration>();
-  private nextGenerationId = 0;
   private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
-  private readonly processLeaseTransitionQueue = new KeyedAsyncQueue();
-  private readonly processLeaseOperationCounts = new Map<string, number>();
-  private readonly uncertainProcessLeaseIds = new Set<string>();
   private readonly cwd: string;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
@@ -569,67 +566,79 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       },
       list: () => this.agentRegistry.list(),
     };
-    const sharedOptions = {
-      ...options,
-      sessionStore: this.sessionStore,
-      agentRegistry: this.scopedAgentRegistry,
-    };
-    this.delegateOptions = sharedOptions;
-    this.delegateTestOptions = delegateTestOptions as BaseAcpxRuntimeTestOptions;
-    this.delegate = new BaseAcpxRuntime(sharedOptions, this.delegateTestOptions);
-    this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
-      ? new BaseAcpxRuntime(
-          {
-            ...sharedOptions,
-            mcpServers: [],
+    this.createDelegate = () =>
+      new BaseAcpxRuntime(
+        {
+          ...options,
+          sessionStore: this.sessionStore,
+          agentRegistry: this.scopedAgentRegistry,
+          mcpServers: (context) => {
+            const servers =
+              typeof options.mcpServers === "function"
+                ? options.mcpServers(context)
+                : (options.mcpServers ?? []);
+            if (isOpenClawBridgeCommand(context.agentArgv ?? context.agentCommand)) {
+              return [];
+            }
+            const target = this.sessionScope.getStore();
+            if (!this.managedToolsMcpBridgeEnabled) {
+              return servers;
+            }
+            if (!target) {
+              throw new AcpRuntimeError(
+                "ACP_SESSION_INIT_FAILED",
+                "ACP tool bridge has no session owner",
+              );
+            }
+            return withManagedToolsMcpSessionEnv({
+              pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
+              openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
+              mcpServers: servers,
+              ...target,
+            });
           },
-          this.delegateTestOptions,
-        )
-      : this.delegate;
+          processLifecycle: {
+            onBeforeSpawn: async (launch) => {
+              await options.processLifecycle?.onBeforeSpawn?.(launch);
+              await this.recordProcessLaunch(launch);
+            },
+            onSpawned: async (process) => {
+              await this.recordProcessLaunch(process);
+              await options.processLifecycle?.onSpawned?.(process);
+            },
+            onSpawnFailed: options.processLifecycle?.onSpawnFailed,
+            onExit: options.processLifecycle?.onExit,
+          },
+        },
+        delegateTestOptions as BaseAcpxRuntimeTestOptions,
+      );
+    this.delegate = this.createDelegate();
+    this.generationRegistry = new AcpxGenerationRegistry(
+      this.sessionStore,
+      this.delegate,
+      this.createDelegate,
+    );
     this.probeAgent = normalizeAgentName(options.probeAgent) ?? "codex";
     const probeCommand = resolveAgentCommand({
       agentName: this.probeAgent,
       agentRegistry: this.agentRegistry,
     });
     this.probeCommand = probeCommand;
-    const useBridgeSafeProbe =
-      this.managedToolsMcpBridgeEnabled || isOpenClawBridgeCommand(probeCommand);
-    this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
-  private currentGeneration(resource: string): AcpxGeneration {
-    let generation = this.generations.get(resource);
-    if (!generation) {
-      generation = {
-        id: ++this.nextGenerationId,
-        resource,
-        ensureQueue: new KeyedAsyncQueue(),
-        retired: false,
-        afterReset: this.sessionStore.isFresh(resource),
-        awaitPriorWrites: this.sessionStore.isFresh(resource),
-      };
-      this.generations.set(resource, generation);
-    }
-    return generation;
-  }
-
-  private retireGeneration(generation: AcpxGeneration): void {
-    generation.retired = true;
-    if (this.generations.get(generation.resource) === generation) {
-      this.generations.delete(generation.resource);
-      if (this.managedToolsSessionDelegates.get(generation.resource) === generation.delegate) {
-        this.managedToolsSessionDelegates.delete(generation.resource);
-      }
-      this.sessionStore.markFresh(generation.resource);
-    }
-  }
-
-  private assertCurrentGeneration(generation: AcpxGeneration): void {
-    if (generation.retired) {
-      throw new AcpRuntimeError(
-        "ACP_TURN_FAILED",
-        "ACP runtime operation was superseded by reset.",
-      );
+  private async runInGeneration<T>(
+    target: { sessionKey: string; agentId?: string; acpxRecordId?: string },
+    scope: { generation: AcpxGeneration; closeRecord?: AcpLoadedSessionRecord; recordId?: string },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const release = this.generationRegistry.retainGenerationOperation(
+      scope.generation,
+      scope.recordId ?? target.acpxRecordId ?? scope.generation.resource,
+    );
+    try {
+      return await this.sessionScope.run(target, () => acpxOperationScope.run(scope, run));
+    } finally {
+      release();
     }
   }
 
@@ -640,84 +649,29 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }): BaseAcpxRuntime {
     const generation =
       acpxOperationScope.getStore()?.generation ??
-      this.currentGeneration(resolveAcpxSessionResource(params));
-    if (generation.delegate) {
-      return generation.delegate;
-    }
-    if (!generation.afterReset) {
-      generation.delegate = isOpenClawBridgeCommand(params.command)
-        ? this.bridgeSafeDelegate
-        : this.resolveManagedToolsDelegateForSession(params);
-      return generation.delegate;
-    }
-    const options = isOpenClawBridgeCommand(params.command)
-      ? { ...this.delegateOptions, mcpServers: [] }
-      : this.managedToolsMcpBridgeEnabled
-        ? {
-            ...this.delegateOptions,
-            mcpServers: withManagedToolsMcpSessionEnv({
-              pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
-              openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
-              mcpServers: this.delegateOptions.mcpServers,
-              sessionKey: params.sessionKey,
-              agentId: params.agentId,
-            }),
-          }
-        : this.delegateOptions;
-    generation.delegate = new BaseAcpxRuntime(options, this.delegateTestOptions);
-    if (
-      this.managedToolsMcpBridgeEnabled &&
-      !isOpenClawBridgeCommand(params.command) &&
-      !generation.retired
-    ) {
-      this.managedToolsSessionDelegates.set(generation.resource, generation.delegate);
-    }
-    return generation.delegate;
+      this.generationRegistry.currentGeneration(resolveAcpxSessionResource(params));
+    return this.generationRegistry.resolveDelegate(generation);
   }
 
-  private resolveManagedToolsDelegateForSession(target: {
-    sessionKey: string;
-    agentId?: string;
-  }): BaseAcpxRuntime {
-    if (!this.managedToolsMcpBridgeEnabled) {
-      return this.delegate;
-    }
-    const resource = resolveAcpxSessionResource(target);
-    const cached = this.managedToolsSessionDelegates.get(resource);
-    if (cached) {
-      return cached;
-    }
-    const delegate = new BaseAcpxRuntime(
-      {
-        ...this.delegateOptions,
-        mcpServers: withManagedToolsMcpSessionEnv({
-          pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
-          openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
-          mcpServers: this.delegateOptions.mcpServers,
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-        }),
-      },
-      this.delegateTestOptions,
+  private generationForHandle(handle: OpenClawRuntimeHandle): AcpxGeneration {
+    const resource = assertAcpxSessionOwnerLocator(
+      { ...handle, persistedHandle: handle },
+      this.legacyBareSessionKeys,
     );
-    this.managedToolsSessionDelegates.set(resource, delegate);
-    return delegate;
+    const capturedGeneration = (handle as GenerationHandle)[acpxGenerationKey];
+    return this.generationRegistry.fromCaptured(resource, capturedGeneration);
   }
 
   private async loadOperationSnapshotForHandle(
     handle: OpenClawRuntimeHandle,
     allowRetired = false,
+    generation = this.generationForHandle(handle),
   ): Promise<AcpxHandleOperationSnapshot> {
-    const resource = assertAcpxSessionOwnerLocator(
-      { ...handle, persistedHandle: handle },
-      this.legacyBareSessionKeys,
-    );
-    const generation =
-      (handle as GenerationHandle)[acpxGenerationKey] ?? this.currentGeneration(resource);
+    const resource = generation.resource;
     if (!allowRetired) {
-      this.assertCurrentGeneration(generation);
+      this.generationRegistry.assertCurrentGeneration(generation);
     }
-    const ownedRecord = generation.record;
+    const ownedRecord = generation.records.get(handle.acpxRecordId ?? resource);
     if (
       ownedRecord &&
       ((handle.acpxRecordId && ownedRecord.acpxRecordId !== handle.acpxRecordId) ||
@@ -743,10 +697,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       record = ownedRecord;
     }
     if (allowRetired && record) {
-      generation.record = record;
+      captureGenerationRecord(generation, record);
     }
     if (!allowRetired) {
-      this.assertCurrentGeneration(generation);
+      this.generationRegistry.assertCurrentGeneration(generation);
     }
     if (
       record &&
@@ -766,6 +720,30 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         agentName: readAgentFromHandle(handle),
         agentRegistry: this.agentRegistry,
       });
+    const identity = readAcpxProcessLeaseIdentity(command);
+    if (identity && this.processLeaseStore && this.gatewayInstanceId && this.wrapperRoot) {
+      const lease = await this.processLeaseStore.load(identity.leaseId);
+      if (identity.gatewayInstanceId !== this.gatewayInstanceId) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `ACPX process lease ${identity.leaseId} belongs to another gateway`,
+        );
+      }
+      if (
+        lease &&
+        (lease.gatewayInstanceId !== identity.gatewayInstanceId ||
+          lease.sessionKey !== resolveAcpxSessionResource(handle) ||
+          lease.wrapperRoot !== this.wrapperRoot)
+      ) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `ACPX process lease ${identity.leaseId} belongs to another session`,
+        );
+      }
+    }
+    if (!allowRetired) {
+      this.generationRegistry.assertCurrentGeneration(generation);
+    }
     return { record, command, generation };
   }
 
@@ -773,12 +751,14 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     handle: OpenClawRuntimeHandle,
     snapshot: AcpxHandleOperationSnapshot,
   ): BaseAcpxRuntime {
-    return acpxOperationScope.run({ generation: snapshot.generation }, () =>
-      this.resolveDelegateForSession({
-        command: snapshot.command,
-        sessionKey: handle.sessionKey,
-        agentId: handle.agentId,
-      }),
+    return acpxOperationScope.run(
+      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
+      () =>
+        this.resolveDelegateForSession({
+          command: snapshot.command,
+          sessionKey: handle.sessionKey,
+          agentId: handle.agentId,
+        }),
     );
   }
 
@@ -851,7 +831,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         params.run,
       );
     }
-    const processLeaseStore = this.processLeaseStore;
     const reusableIdentity = readAcpxProcessLeaseIdentity(params.reusableCommand);
     const canReuseLeaseIdentity = reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId;
     // Repeated probes share one uncertainty row per Gateway and wrapper. Unique probe rows could
@@ -876,281 +855,66 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       resolvedCommand: params.reusableCommand ?? leasedCommand,
       leasedCommand,
     };
-    // Reuse-only adoption cannot spawn: readReusablePersistentSessionCommand
-    // mirrors upstream's exact reuse policy. Persist the new command first and
-    // let the next reconnect create its matching pending lease.
-    await this.retainProcessLeaseOperation(launch, async () => {
-      const reusableLease = canReuseLeaseIdentity
-        ? await processLeaseStore.load(launch.leaseId)
-        : undefined;
-      if (
-        reusableLease &&
-        (reusableLease.gatewayInstanceId !== launch.gatewayInstanceId ||
-          reusableLease.sessionKey !== launch.sessionKey ||
-          reusableLease.wrapperRoot !== launch.wrapperRoot)
-      ) {
-        throw new AcpRuntimeError(
-          "ACP_SESSION_INIT_FAILED",
-          `ACPX process lease ${launch.leaseId} belongs to another session`,
-        );
-      }
-      const ownsPendingLease =
-        !reusableLease &&
-        (!params.reusableCommand ||
-          isDeepStrictEqual(
-            splitCommandParts(params.reusableCommand),
-            splitCommandParts(leasedCommand),
-          ));
-      if (!ownsPendingLease) {
-        return;
-      }
-      // The pending lease is written before acpx can spawn. The session-store
-      // save fills in the PID; uncertain launch failures leave it for recovery.
-      await processLeaseStore.save({
-        leaseId: launch.leaseId,
+    const result = await this.launchLeaseScope.run(launch, () =>
+      this.launchCommandScope.run(
+        {
+          agent: normalizeAgentName(params.agent) ?? params.agent,
+          command: launch.resolvedCommand,
+        },
+        params.run,
+      ),
+    );
+    if (params.finalizeCompletedProbe) {
+      await cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId,
         gatewayInstanceId: launch.gatewayInstanceId,
-        sessionKey: launch.sessionKey,
         wrapperRoot: launch.wrapperRoot,
         wrapperPath: extractGeneratedWrapperPath(leasedCommand),
-        rootPid: 0,
-        commandHash: hashAcpxProcessCommand(leasedCommand),
-        startedAt: Date.now(),
-        state: "open",
-      });
-    });
-    try {
-      const result = await this.launchLeaseScope.run(launch, () =>
-        this.launchCommandScope.run(
-          {
-            agent: normalizeAgentName(params.agent) ?? params.agent,
-            command: launch.resolvedCommand,
-          },
-          params.run,
-        ),
-      );
-      if (params.finalizeCompletedProbe) {
-        await this.finalizeCompletedProbeLease(launch);
-      } else {
-        await this.finalizeProcessLeaseForSession(params.sessionKey, launch);
-      }
-      return result;
-    } catch (error) {
-      await this.releaseProcessLeaseAfterUncertainFailure(launch);
-      throw error;
-    }
-  }
-
-  private async prepareProcessLeaseForOperation(
-    handle: OpenClawRuntimeHandle,
-    record: AcpLoadedSessionRecord,
-  ): Promise<AcpxProcessLeaseIdentity | undefined> {
-    if (!this.processLeaseStore || !this.gatewayInstanceId || !this.wrapperRoot) {
-      return undefined;
-    }
-    const processLeaseStore = this.processLeaseStore;
-    const wrapperRoot = this.wrapperRoot;
-    const recordPid = readRecordAgentPid(record);
-    const command = readRecordAgentCommand(record);
-    const identity = readAcpxProcessLeaseIdentity(command);
-    if (
-      !command ||
-      !isOpenClawLeaseAwareAcpxProcessCommand({
-        command,
-        wrapperRoot,
-      })
-    ) {
-      return undefined;
-    }
-    if (!identity) {
-      return undefined;
-    }
-    if (identity.gatewayInstanceId !== this.gatewayInstanceId) {
-      throw new AcpRuntimeError(
-        "ACP_TURN_FAILED",
-        `ACPX process lease ${identity.leaseId} belongs to another gateway`,
-      );
-    }
-    await this.retainProcessLeaseOperation(identity, async () => {
-      const existing = await processLeaseStore.load(identity.leaseId);
-      if (!existing) {
-        // Preserve a PID already persisted with this lease identity. Otherwise
-        // reconnect starts from a pending row until upstream saves its new PID.
-        await processLeaseStore.save({
-          leaseId: identity.leaseId,
-          gatewayInstanceId: identity.gatewayInstanceId,
-          sessionKey: resolveAcpxSessionResource(handle),
-          wrapperRoot,
-          wrapperPath: extractGeneratedWrapperPath(command),
-          rootPid: recordPid ?? 0,
-          commandHash: hashAcpxProcessCommand(command),
-          startedAt: Date.now(),
-          state: "open",
-        });
-        return;
-      }
-      if (
-        existing.gatewayInstanceId !== identity.gatewayInstanceId ||
-        existing.sessionKey !== resolveAcpxSessionResource(handle) ||
-        existing.wrapperRoot !== wrapperRoot
-      ) {
-        throw new AcpRuntimeError(
-          "ACP_TURN_FAILED",
-          `ACPX process lease ${identity.leaseId} belongs to another session`,
-        );
-      }
-    });
-    return identity;
-  }
-
-  private async retainProcessLeaseOperation(
-    identity: AcpxProcessLeaseIdentity,
-    prepare: () => Promise<void>,
-  ): Promise<void> {
-    await this.processLeaseTransitionQueue.enqueue(identity.leaseId, async () => {
-      await prepare();
-      this.processLeaseOperationCounts.set(
-        identity.leaseId,
-        (this.processLeaseOperationCounts.get(identity.leaseId) ?? 0) + 1,
-      );
-    });
-  }
-
-  private async releaseProcessLeaseOperation(
-    identity: AcpxProcessLeaseIdentity | undefined,
-    finalize: () => Promise<void>,
-  ): Promise<void> {
-    if (!identity) {
-      return;
-    }
-    await this.processLeaseTransitionQueue.enqueue(identity.leaseId, async () => {
-      const count = this.processLeaseOperationCounts.get(identity.leaseId) ?? 0;
-      if (count > 1) {
-        this.processLeaseOperationCounts.set(identity.leaseId, count - 1);
-        return;
-      }
-      if (count === 0) {
-        return;
-      }
-      // Keep the zero-owner check and retirement in one lease-local transition.
-      // Otherwise a reconnect can retain a row while an older owner deletes it.
-      this.processLeaseOperationCounts.delete(identity.leaseId);
-      await finalize();
-    });
-  }
-
-  private async finalizeProcessLeaseForOperation(
-    handle: OpenClawRuntimeHandle,
-    identity: AcpxProcessLeaseIdentity | undefined,
-  ): Promise<void> {
-    await this.finalizeProcessLeaseForSession(
-      handle.acpxRecordId ?? resolveAcpxSessionResource(handle),
-      identity,
-    );
-  }
-
-  private async finalizeProcessLeaseForSession(
-    sessionId: string,
-    identity: AcpxProcessLeaseIdentity | undefined,
-  ): Promise<void> {
-    if (!identity || !this.processLeaseStore) {
-      return;
-    }
-    const processLeaseStore = this.processLeaseStore;
-    await this.releaseProcessLeaseOperation(identity, async () => {
-      const lease = await processLeaseStore.load(identity.leaseId);
-      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
-        return;
-      }
-      if (lease.rootPid <= 0) {
-        if (this.uncertainProcessLeaseIds.has(identity.leaseId)) {
-          return;
-        }
-        await processLeaseStore.markState(identity.leaseId, "lost");
-        return;
-      }
-      this.uncertainProcessLeaseIds.delete(identity.leaseId);
-      try {
-        const record = await this.sessionStore.load(sessionId);
-        const recordIdentity = readAcpxProcessLeaseIdentity(readRecordAgentCommand(record));
-        if (
-          recordIdentity?.leaseId !== identity.leaseId ||
-          recordIdentity.gatewayInstanceId !== identity.gatewayInstanceId
-        ) {
-          await processLeaseStore.markState(identity.leaseId, "lost");
-        }
-      } catch {
-        // Preserve a PID-bearing lease for startup verification when record reload
-        // fails; deleting it here could lose the only cleanup identity.
-      }
-    });
-  }
-
-  private async finalizeCompletedProbeLease(identity: AcpxLaunchLeaseContext): Promise<void> {
-    if (!this.processLeaseStore) {
-      return;
-    }
-    const processLeaseStore = this.processLeaseStore;
-    await this.releaseProcessLeaseOperation(identity, async () => {
-      const lease = await processLeaseStore.load(identity.leaseId);
-      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
-        return;
-      }
-      // Upstream probe close is bounded and best-effort. Delegate fulfillment
-      // does not prove the wrapper exited, so verify the exact pending identity.
-      // Keep the lease even when the wrapper is absent: its detached adapter
-      // descendants do not carry lease args and may already be reparented.
-      if (lease.rootPid > 0) {
-        return;
-      }
-      await cleanupOpenClawOwnedAcpxPendingLease({
-        leaseId: lease.leaseId,
-        gatewayInstanceId: lease.gatewayInstanceId,
-        wrapperRoot: lease.wrapperRoot,
-        wrapperPath: lease.wrapperPath,
         deps: this.processCleanupDeps,
       });
-    });
+    }
+    return result;
   }
 
-  private async releaseProcessLeaseAfterUncertainFailure(
-    identity: AcpxProcessLeaseIdentity | undefined,
-  ): Promise<void> {
-    if (!identity || !this.processLeaseStore) {
+  private async recordProcessLaunch(process: AcpProcessLaunch | AcpProcessStarted): Promise<void> {
+    const command = [process.command, ...process.args];
+    const identity = readAcpxProcessLeaseIdentity(command);
+    if (!identity || !this.processLeaseStore || !this.wrapperRoot) {
       return;
     }
-    this.uncertainProcessLeaseIds.add(identity.leaseId);
-    const processLeaseStore = this.processLeaseStore;
-    await this.releaseProcessLeaseOperation(identity, async () => {
-      const lease = await processLeaseStore.load(identity.leaseId);
-      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId || lease.rootPid > 0) {
-        this.uncertainProcessLeaseIds.delete(identity.leaseId);
-      }
+    const sessionKey =
+      process.scope.kind === "runtime-session"
+        ? process.scope.sessionKey
+        : ACPX_PROBE_LEASE_SESSION_KEY;
+    const existing = await this.processLeaseStore.load(identity.leaseId);
+    if (
+      identity.gatewayInstanceId !== this.gatewayInstanceId ||
+      (existing &&
+        (existing.gatewayInstanceId !== identity.gatewayInstanceId ||
+          existing.sessionKey !== sessionKey ||
+          existing.wrapperRoot !== this.wrapperRoot))
+    ) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP process lease belongs to another owner",
+      );
+    }
+    if (!isOpenClawLeaseAwareAcpxProcessCommand({ command, wrapperRoot: this.wrapperRoot })) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP process lease has no owned wrapper",
+      );
+    }
+    await this.processLeaseStore.save({
+      ...identity,
+      sessionKey,
+      wrapperRoot: this.wrapperRoot,
+      wrapperPath: extractGeneratedWrapperPath(command),
+      rootPid: "pid" in process ? process.pid : 0,
+      commandHash: hashAcpxProcessCommand(command),
+      startedAt: "startedAt" in process ? Date.parse(process.startedAt) : Date.now(),
+      state: "open",
     });
-  }
-
-  private async runWithProcessLeaseForHandle<T>(
-    handle: OpenClawRuntimeHandle,
-    record: AcpLoadedSessionRecord,
-    run: () => Promise<T>,
-  ): Promise<T> {
-    const identity = await this.prepareProcessLeaseForOperation(handle, record);
-    try {
-      return await run();
-    } finally {
-      await this.finalizeProcessLeaseForOperation(handle, identity);
-    }
-  }
-
-  private async finalizeProcessLeaseAfter<T>(
-    handle: OpenClawRuntimeHandle,
-    identityPromise: Promise<AcpxProcessLeaseIdentity | undefined>,
-    resultPromise: Promise<T>,
-  ): Promise<T> {
-    try {
-      return await resultPromise;
-    } finally {
-      await this.finalizeProcessLeaseForOperation(handle, await identityPromise);
-    }
   }
 
   private async withCodexWrapperDiagnostics<T>(params: {
@@ -1217,20 +981,32 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       sessionKeys.includes(loadedLease.sessionKey)
         ? loadedLease
         : undefined);
-    if (lease && lease.gatewayInstanceId === this.gatewayInstanceId && lease.rootPid > 0) {
+    if (lease && lease.gatewayInstanceId === this.gatewayInstanceId) {
       await this.processLeaseStore?.markState(lease.leaseId, "closing");
-      const result = await cleanupOpenClawOwnedAcpxProcessTree({
-        rootPid: lease.rootPid,
-        rootCommand: record?.agentCommand,
-        expectedLeaseId: lease.leaseId,
-        expectedGatewayInstanceId: lease.gatewayInstanceId,
-        wrapperRoot: lease.wrapperRoot,
-        deps: this.processCleanupDeps,
-      });
+      const result =
+        lease.rootPid > 0
+          ? await cleanupOpenClawOwnedAcpxProcessTree({
+              rootPid: lease.rootPid,
+              rootCommand: record?.agentCommand,
+              expectedLeaseId: lease.leaseId,
+              expectedGatewayInstanceId: lease.gatewayInstanceId,
+              wrapperRoot: lease.wrapperRoot,
+              deps: this.processCleanupDeps,
+            })
+          : await cleanupOpenClawOwnedAcpxPendingLease({
+              leaseId: lease.leaseId,
+              gatewayInstanceId: lease.gatewayInstanceId,
+              wrapperRoot: lease.wrapperRoot,
+              wrapperPath: lease.wrapperPath,
+              deps: this.processCleanupDeps,
+            });
       await this.processLeaseStore?.markState(
         lease.leaseId,
         result.skippedReason === "process-list-unavailable" ||
-          result.skippedReason === "unsupported-platform"
+          result.skippedReason === "unsupported-platform" ||
+          (lease.rootPid <= 0 &&
+            (result.skippedReason === "ambiguous-root" ||
+              result.skippedReason === "unverified-root"))
           ? "open"
           : result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
             ? "closed"
@@ -1259,40 +1035,61 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
   }
 
+  async shutdown(): Promise<void> {
+    await this.generationRegistry.shutdown();
+  }
+
   isHealthy(): boolean {
-    return this.probeDelegate.isHealthy();
+    return this.delegate.isHealthy();
   }
 
   async probeAvailability(): Promise<void> {
-    await this.runWithLaunchLease({
-      agent: this.probeAgent,
-      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-      command: this.probeCommand,
-      finalizeCompletedProbe: true,
-      run: () => this.probeDelegate.probeAvailability(),
-    });
+    await this.probeQueue.enqueue(this.probeAgent, () =>
+      this.runWithLaunchLease({
+        agent: this.probeAgent,
+        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+        command: this.probeCommand,
+        finalizeCompletedProbe: true,
+        run: () => this.delegate.probeAvailability(),
+      }),
+    );
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    return await this.runWithLaunchLease({
-      agent: this.probeAgent,
-      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-      command: this.probeCommand,
-      finalizeCompletedProbe: true,
-      run: () => this.probeDelegate.doctor(),
-    });
+    return await this.probeQueue.enqueue(this.probeAgent, () =>
+      this.runWithLaunchLease({
+        agent: this.probeAgent,
+        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+        command: this.probeCommand,
+        finalizeCompletedProbe: true,
+        run: () => this.delegate.doctor(),
+      }),
+    );
   }
 
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<OpenClawRuntimeHandle> {
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
-    const generation = this.currentGeneration(resource);
+    const generation = this.generationRegistry.currentGeneration(resource);
     return await generation.ensureQueue.enqueue(resource + "\u0000" + generation.id, () =>
-      acpxOperationScope.run({ generation }, async () => {
-        this.assertCurrentGeneration(generation);
-        const handle = await this.ensureSessionUnlocked(input);
-        return { ...handle, [acpxGenerationKey]: generation };
+      this.runInGeneration(input, { generation }, async () => {
+        this.generationRegistry.assertCurrentGeneration(generation);
+        const handle = {
+          ...(await this.ensureSessionUnlocked(input)),
+          [acpxGenerationKey]: generation,
+        };
+        if (generation.retired && !this.generationRegistry.isStopping) {
+          // ACPX can retain a live client before the reset fence observes this
+          // result. Keep the exact handle reachable until its cleanup settles.
+          await this.close({
+            handle,
+            reason: "superseded-initialization",
+            discardPersistentState: true,
+          });
+        }
+        this.generationRegistry.assertCurrentGeneration(generation);
+        return handle;
       }),
     );
   }
@@ -1406,7 +1203,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     }
   }
 
-  startTurn(input: OpenClawRuntimeTurnInput): CompleteAcpRuntimeTurn {
+  startTurn(input: Parameters<NonNullable<AcpRuntime["startTurn"]>>[0]): CompleteAcpRuntimeTurn {
     const withTurnDiagnostics = <T>(command: AcpxAgentCommand | undefined, run: () => Promise<T>) =>
       this.withCodexWrapperDiagnostics({
         command,
@@ -1415,22 +1212,31 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         run,
       });
     const snapshotPromise = this.loadOperationSnapshotForHandle(input.handle);
-    const turnLeasePromise = snapshotPromise.then(({ record }) =>
-      this.prepareProcessLeaseForOperation(input.handle, record),
-    );
-    const turnPromise = Promise.all([snapshotPromise, turnLeasePromise]).then(([snapshot]) => {
-      const { command } = snapshot;
+    const turnPromise = snapshotPromise.then((snapshot) => {
+      const { command, generation } = snapshot;
+      this.generationRegistry.assertCurrentGeneration(generation);
       const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
-      this.assertCurrentGeneration(snapshot.generation);
-      return acpxOperationScope.run({ generation: snapshot.generation }, () =>
-        withTurnDiagnostics(command, async () => ({
-          command,
-          turn: delegate.startTurn({
-            ...toAcpxResourceInput(input),
-            // OpenClaw owns deadlines; acpx timeouts can report partial output as completed.
-            timeoutMs: 0,
+      return this.sessionScope.run(input.handle, () =>
+        acpxOperationScope.run({ generation }, () =>
+          withTurnDiagnostics(command, async () => {
+            const release = this.generationRegistry.retainGenerationOperation(
+              generation,
+              snapshot.record?.acpxRecordId ?? input.handle.acpxRecordId ?? generation.resource,
+            );
+            try {
+              const turn = delegate.startTurn({
+                ...toAcpxResourceInput(input),
+                // OpenClaw owns deadlines; ACPX must not complete partial output.
+                timeoutMs: 0,
+              });
+              void turn.result.then(release, release);
+              return { command, turn };
+            } catch (error) {
+              release();
+              throw error;
+            }
           }),
-        })),
+        ),
       );
     });
 
@@ -1452,33 +1258,29 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           }
         },
       },
-      result: this.finalizeProcessLeaseAfter(
-        input.handle,
-        turnLeasePromise,
-        turnPromise.then(({ command, turn }) =>
-          withTurnDiagnostics(command, async (): Promise<AcpRuntimeTurnResult> => {
-            const result = await turn.result;
-            if (
-              result.status !== "failed" ||
-              !isCodexAcpCommand(command) ||
-              !isGenericInternalAcpErrorMessage(result.error.message)
-            ) {
-              return result;
-            }
-            const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
-            if (!stderrTail) {
-              return result;
-            }
-            return {
-              status: "failed",
-              error: {
-                ...result.error,
-                code: "ACP_TURN_FAILED",
-                message: `Internal error: ${stderrTail}`,
-              },
-            };
-          }),
-        ),
+      result: turnPromise.then(({ command, turn }) =>
+        withTurnDiagnostics(command, async (): Promise<AcpRuntimeTurnResult> => {
+          const result = await turn.result;
+          if (
+            result.status !== "failed" ||
+            !isCodexAcpCommand(command) ||
+            !isGenericInternalAcpErrorMessage(result.error.message)
+          ) {
+            return result;
+          }
+          const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+          if (!stderrTail) {
+            return result;
+          }
+          return {
+            status: "failed",
+            error: {
+              ...result.error,
+              code: "ACP_TURN_FAILED",
+              message: `Internal error: ${stderrTail}`,
+            },
+          };
+        }),
       ),
       cancel(inputArgs?: { reason?: string }) {
         return turnPromise.then(({ turn }) => turn.cancel(inputArgs));
@@ -1489,33 +1291,42 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     };
   }
 
-  getCapabilities(
+  async getCapabilities(
     input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
-  ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    return this.delegate.getCapabilities(
+  ): Promise<AcpRuntimeCapabilities> {
+    const capabilities = await this.delegate.getCapabilities(
       input?.handle ? toAcpxResourceInput({ handle: input.handle }) : input,
     );
+    return {
+      ...capabilities,
+      // Core exposes model control through config options.
+      controls: capabilities.controls.filter((control) => control !== "session/set_model"),
+    };
   }
 
   async getStatus(
     input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0],
   ): Promise<AcpRuntimeStatus> {
     const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
-    return acpxOperationScope.run({ generation: snapshot.generation }, () =>
-      this.resolveDelegateForOperationSnapshot(input.handle, snapshot).getStatus(
-        toAcpxResourceInput(input),
-      ),
+    return this.runInGeneration(
+      input.handle,
+      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
+      () =>
+        this.resolveDelegateForOperationSnapshot(input.handle, snapshot).getStatus(
+          toAcpxResourceInput(input),
+        ),
     );
   }
 
   async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
     const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
-    await acpxOperationScope.run({ generation: snapshot.generation }, () =>
-      this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
+    await this.runInGeneration(
+      input.handle,
+      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
+      () =>
         this.resolveDelegateForOperationSnapshot(input.handle, snapshot).setMode(
           toAcpxResourceInput(input),
         ),
-      ),
     );
   }
 
@@ -1523,10 +1334,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
   ): ReturnType<NonNullable<AcpRuntime["setConfigOption"]>> {
     const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
-    return await acpxOperationScope.run({ generation: snapshot.generation }, () =>
-      this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
-        this.setConfigOptionUnlocked(input, snapshot),
-      ),
+    return await this.runInGeneration(
+      input.handle,
+      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
+      () => this.setConfigOptionUnlocked(input, snapshot),
     );
   }
 
@@ -1552,7 +1363,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         const modelResult = override.model
           ? await delegate.setConfigOption({ ...input, key: "model", value: override.model })
           : undefined;
-        this.assertCurrentGeneration(snapshot.generation);
+        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
         if (override.reasoningEffort) {
           return await delegate.setConfigOption({
             ...input,
@@ -1591,69 +1402,67 @@ export class AcpxRuntime implements CompleteAcpRuntime {
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
     const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
-    await acpxOperationScope.run({ generation: snapshot.generation }, () =>
-      this.resolveDelegateForOperationSnapshot(input.handle, snapshot).cancel(
-        toAcpxResourceInput(input),
-      ),
+    await this.runInGeneration(
+      input.handle,
+      { generation: snapshot.generation, recordId: snapshot.record?.acpxRecordId },
+      () =>
+        this.resolveDelegateForOperationSnapshot(input.handle, snapshot).cancel(
+          toAcpxResourceInput(input),
+        ),
     );
   }
 
   async prepareFreshSession(
     input: Parameters<NonNullable<AcpRuntime["prepareFreshSession"]>>[0],
   ): Promise<void> {
-    // Fresh reset has no ACP handle to close the delegate's upstream client.
-    // Keep the scoped delegate reachable so the next ensure can replace it;
-    // close() owns cache release when the session lifecycle ends.
+    // Reset detaches the old lane immediately. Admitted operations retain its
+    // cleanup custody until they settle; the successor owns an independent lane.
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
-    const generation = this.generations.get(resource);
-    if (generation) {
-      this.retireGeneration(generation);
-    } else {
-      this.sessionStore.markFresh(resource);
-    }
+    this.generationRegistry.prepareFresh(resource);
     // The validated reset retires this startup record before metadata is cleared.
     this.legacyBareSessionKeys.delete(resource);
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    const snapshot = await this.loadOperationSnapshotForHandle(input.handle, true);
-    const generation = snapshot.generation;
-    const closeLease = await this.prepareProcessLeaseForOperation(input.handle, snapshot.record);
-    const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
-    // Detach before a backend close can hang. Its snapshot remains available only
-    // to this operation; the new generation has independent upstream locks.
-    if (input.discardPersistentState) {
-      this.retireGeneration(generation);
-      this.legacyBareSessionKeys.delete(generation.resource);
-    }
-    let cleanupSucceeded = false;
-    try {
-      try {
-        await acpxOperationScope.run({ generation, closeRecord: snapshot.record }, () =>
-          delegate.close({
-            handle: toAcpxResourceInput(input).handle,
-            reason: input.reason,
-            discardPersistentState: input.discardPersistentState,
-          }),
-        );
-        if (!generation.retired && this.generations.get(generation.resource) === generation) {
-          generation.retired = true;
-          if (this.managedToolsSessionDelegates.get(generation.resource) === delegate) {
-            this.managedToolsSessionDelegates.delete(generation.resource);
-          }
-          this.generations.delete(generation.resource);
+    const generation = this.generationForHandle(input.handle);
+    // Snapshot reads can yield to reset. Retain cleanup custody before the first
+    // await so retirement cannot shut down this close's private runtime.
+    await this.runInGeneration(input.handle, { generation }, async () => {
+      const snapshot = await this.loadOperationSnapshotForHandle(input.handle, true, generation);
+      const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
+      await acpxOperationScope.run({ generation, closeRecord: snapshot.record }, async () => {
+        // Detach before a destructive backend close can stall. Only the captured
+        // generation owns its cleanup; it cannot overwrite a successor.
+        if (
+          input.discardPersistentState &&
+          decodeAcpxRuntimeHandleState(input.handle.runtimeSessionName)?.mode !== "oneshot"
+        ) {
+          this.generationRegistry.retireGeneration(generation);
+          this.legacyBareSessionKeys.delete(generation.resource);
         }
-      } finally {
-        await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
-        cleanupSucceeded = true;
-      }
-    } finally {
-      if (cleanupSucceeded) {
-        await this.finalizeProcessLeaseForOperation(input.handle, closeLease);
-      } else {
-        await this.releaseProcessLeaseAfterUncertainFailure(closeLease);
-      }
-    }
+        try {
+          await delegate.close(toAcpxResourceInput(input));
+        } finally {
+          await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
+        }
+        // Oneshot sessions can share the logical key without sharing physical
+        // records. Closing one handle cannot retire another record's live lane.
+        const recordId =
+          snapshot.record?.acpxRecordId ?? input.handle.acpxRecordId ?? generation.resource;
+        const currentRecord = generation.records.get(recordId);
+        if (
+          !currentRecord ||
+          (currentRecord.acpSessionId === snapshot.record?.acpSessionId &&
+            currentRecord.createdAt === snapshot.record?.createdAt)
+        ) {
+          generation.records.delete(recordId);
+          if (generation.activeRecordOperations.has(recordId)) {
+            generation.closedRecordIds.add(recordId);
+          }
+        }
+        generation.closeCompleted = true;
+      });
+    });
   }
 }
 
