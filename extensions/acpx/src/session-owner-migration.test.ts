@@ -278,42 +278,51 @@ it.each(["runtime", "doctor"])(
   },
 );
 
-it("recreates a bare session after an authorized destructive close clears its startup marker", async () => {
-  const target = { agentId: "work", sessionKey: "global" };
-  const resource = resolveAcpxSessionResource(target);
-  const f = await fixture("persistent", resource);
-  const runtime = new AcpxRuntime({
-    ...f.runtimeOptions,
-    openclawLegacyBareSessionKeys: new Set([resource]),
-  });
-  await runtime.close({
-    handle: { ...f.handle, ...target },
-    reason: "session-delete",
-    discardPersistentState: true,
-  });
-  const fresh = await runtime.ensureSession({
-    ...target,
-    agent: "fixture",
-    mode: "persistent",
-  });
-  try {
-    expect(fresh.backendSessionId).not.toBe(f.handle.backendSessionId);
-    const chunks: string[] = [];
-    for await (const event of runtime.runTurn({
-      handle: fresh,
-      text: "recreated",
-      requestId: "after-delete",
-      mode: "prompt",
-    })) {
-      if (event.type === "text_delta") {
-        chunks.push(event.text);
+it.each([false, true])(
+  "recreates a deleted bare session with fresh history (new runtime: %s)",
+  async (restart) => {
+    const target = { agentId: "work", sessionKey: "global" };
+    const resource = resolveAcpxSessionResource(target);
+    const f = await fixture("persistent", resource);
+    const runtime = new AcpxRuntime({
+      ...f.runtimeOptions,
+      openclawLegacyBareSessionKeys: new Set([resource]),
+    });
+    await runtime.close({
+      handle: { ...f.handle, ...target },
+      reason: "session-delete",
+      discardPersistentState: true,
+    });
+    expect(await f.runtimeOptions.sessionStore.load(f.handle.acpxRecordId!)).toMatchObject({
+      closed: true,
+      closedAt: expect.any(String),
+      acpx: { reset_on_next_ensure: true },
+    });
+    const recreatedRuntime = restart ? new AcpxRuntime(f.runtimeOptions) : runtime;
+    const fresh = await recreatedRuntime.ensureSession({
+      ...target,
+      agent: "fixture",
+      mode: "persistent",
+    });
+    try {
+      expect(fresh.backendSessionId).not.toBe(f.handle.backendSessionId);
+      const chunks: string[] = [];
+      for await (const event of recreatedRuntime.runTurn({
+        handle: fresh,
+        text: "recreated",
+        requestId: "after-delete",
+        mode: "prompt",
+      })) {
+        if (event.type === "text_delta") {
+          chunks.push(event.text);
+        }
       }
+      expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["recreated"] });
+    } finally {
+      await recreatedRuntime.close({ handle: fresh, reason: "test-complete" });
     }
-    expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["recreated"] });
-  } finally {
-    await runtime.close({ handle: fresh, reason: "test-complete" });
-  }
-});
+  },
+);
 
 it("keeps oneshot physical IDs and bytes while repairing the canonical locator", async () => {
   const f = await fixture("oneshot");

@@ -24,6 +24,7 @@ export function resolveSessionDefaultAccountId(params: {
   if (!channel) {
     return undefined;
   }
+  // SAFETY: only the optional defaultAccount field is read; its unknown value is normalized below.
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefault = channels?.[channel]?.defaultAccount;
   return normalizeOptionalString(configuredDefault);

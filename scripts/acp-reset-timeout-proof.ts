@@ -1094,26 +1094,25 @@ async function runScenario(params: {
 
 async function createBuiltGatewayRuntime(repoRoot: string): Promise<string> {
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-reset-proof-runtime-"));
-  await fs.copyFile(path.join(repoRoot, "package.json"), path.join(runtimeRoot, "package.json"));
-  await fs.cp(path.join(repoRoot, "dist"), path.join(runtimeRoot, "dist"), { recursive: true });
-  await fs.mkdir(path.join(runtimeRoot, "src", "agents"), { recursive: true });
-  await fs.cp(
-    path.join(repoRoot, "src", "agents", "templates"),
-    path.join(runtimeRoot, "src", "agents", "templates"),
-    { recursive: true },
-  );
-  await fs.mkdir(path.join(runtimeRoot, "docs", "reference"), { recursive: true });
-  await fs.cp(
-    path.join(repoRoot, "docs", "reference", "templates"),
-    path.join(runtimeRoot, "docs", "reference", "templates"),
-    { recursive: true },
-  );
-  await fs.symlink(
-    path.join(repoRoot, "node_modules"),
-    path.join(runtimeRoot, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  return runtimeRoot;
+  try {
+    await fs.copyFile(path.join(repoRoot, "package.json"), path.join(runtimeRoot, "package.json"));
+    await fs.cp(path.join(repoRoot, "dist"), path.join(runtimeRoot, "dist"), { recursive: true });
+    await fs.mkdir(path.join(runtimeRoot, "docs", "reference"), { recursive: true });
+    await fs.cp(
+      path.join(repoRoot, "docs", "reference", "templates"),
+      path.join(runtimeRoot, "docs", "reference", "templates"),
+      { recursive: true },
+    );
+    await fs.symlink(
+      path.join(repoRoot, "node_modules"),
+      path.join(runtimeRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    return runtimeRoot;
+  } catch (error) {
+    await fs.rm(runtimeRoot, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function resolveOutputRoot(repoRoot: string): string {

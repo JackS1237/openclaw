@@ -121,6 +121,7 @@ describe("AcpxRuntime reset generation custody", () => {
         releaseClose = resolve;
       });
       oldRecord.closed = true;
+      oldRecord.acpx = { reset_on_next_ensure: true };
       await wrappedStore.save(oldRecord);
     });
 

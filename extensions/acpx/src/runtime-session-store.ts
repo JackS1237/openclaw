@@ -186,8 +186,9 @@ export function createResetAwareSessionStore(
         return scope.closeRecord;
       }
       const resource = scope?.generation.resource ?? sessionId.trim();
-      if (scope?.generation.awaitPriorWrites || freshSessionKeys.has(resource)) {
-        await Promise.allSettled(pendingWrites.get(resource) ?? []);
+      const pending = pendingWrites.get(resource);
+      if (pending && (scope?.generation.awaitPriorWrites || freshSessionKeys.has(resource))) {
+        await Promise.allSettled(pending);
       }
       const load = async () => {
         if (scope?.generation.retired) {
@@ -237,8 +238,27 @@ export function createResetAwareSessionStore(
         scope.generation.record = record;
       }
       const resource = scope?.generation.resource ?? readSessionRecordName(record);
+      const retiredCloseRecord =
+        scope?.generation.retired && record.closed && record.acpx?.reset_on_next_ensure === true
+          ? scope.closeRecord
+          : undefined;
       const writeRecord = async () => {
         if (scope?.generation.retired) {
+          if (!retiredCloseRecord) {
+            return;
+          }
+          // A completed discard must survive restart, but only while the captured
+          // physical record still owns storage. Successor writes share this fence.
+          const persisted = await baseStore.load(record.acpxRecordId);
+          if (
+            !persisted ||
+            persisted.acpxRecordId !== retiredCloseRecord.acpxRecordId ||
+            persisted.acpSessionId !== retiredCloseRecord.acpSessionId ||
+            persisted.createdAt !== retiredCloseRecord.createdAt
+          ) {
+            return;
+          }
+          await baseStore.save(record);
           return;
         }
         let recordToSave = record;
@@ -328,13 +348,14 @@ export function createResetAwareSessionStore(
           freshSessionKeys.delete(sessionName);
         }
       };
-      // Only a reset successor waits for conflicting physical writes. Ordinary
-      // close overlap retains ACPX's existing non-blocking lifecycle semantics.
+      // Reset successors and terminal old-record writes serialize only conflicting
+      // persistence. Ordinary close overlap retains ACPX's non-blocking semantics.
       const writes = pendingWrites.get(resource) ?? new Set<Promise<void>>();
       const previous = [...writes];
-      const write = scope?.generation.awaitPriorWrites
-        ? Promise.allSettled(previous).then(() => stateQueue.enqueue(resource, writeRecord))
-        : writeRecord();
+      const write =
+        scope?.generation.awaitPriorWrites || retiredCloseRecord
+          ? Promise.allSettled(previous).then(() => stateQueue.enqueue(resource, writeRecord))
+          : writeRecord();
       writes.add(write);
       pendingWrites.set(resource, writes);
       try {
