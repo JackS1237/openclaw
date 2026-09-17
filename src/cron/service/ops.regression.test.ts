@@ -134,7 +134,7 @@ describe("cron service ops regressions", () => {
     }
   });
 
-  it("emits a terminal error when detached admission is already closed", async () => {
+  it("rejects queueing when detached admission is already closed", async () => {
     vi.useRealTimers();
     resetGatewayWorkAdmission();
     const store = opsRegressionFixtures.makeStorePath();
@@ -146,25 +146,24 @@ describe("cron service ops regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const finished = createDeferred<CronEvent>();
+    const onEvent = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronRegressionState({
       storePath: store.storePath,
       nowMs: () => now,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      onEvent: (event) => {
-        if (event.jobId === job.id && event.action === "finished") {
-          finished.resolve(event);
-        }
-      },
+      runIsolatedAgentJob,
+      onEvent,
     });
 
     try {
       markGatewayRestartDraining();
-      expectQueuedRunAck(await enqueueRun(state, job.id, "force"));
-      await expect(finished.promise).resolves.toMatchObject({
-        status: "error",
-        error: expect.stringContaining("gateway is draining for restart"),
-      });
+      await expect(enqueueRun(state, job.id, "force")).rejects.toThrow(
+        "gateway is draining for restart",
+      );
+      expect(getTotalQueueSize()).toBe(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
     } finally {
       resetGatewayWorkAdmission();
     }

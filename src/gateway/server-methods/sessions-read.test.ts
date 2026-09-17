@@ -19,12 +19,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as pluginHostState from "../../plugins/host-hook-state.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { closeSessionSqliteDatabasesForTest } from "../session-utils.test-support.js";
 import { testState } from "../test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -245,13 +244,12 @@ beforeEach(async () => {
   await setAgentsConfig(undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeSessionSqliteDatabasesForTest();
 });
 
 async function configureFixedSessionStore(label = "default"): Promise<string> {

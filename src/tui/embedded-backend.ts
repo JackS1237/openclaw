@@ -681,7 +681,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listAgents(): Promise<TuiAgentsList> {
-    return listAgentsForGateway(getRuntimeConfig()) as TuiAgentsList;
+    return (await listAgentsForGateway(getRuntimeConfig())) as TuiAgentsList;
   }
 
   async patchSession(

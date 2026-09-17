@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
@@ -89,6 +90,21 @@ describePosix("native PR source provisioning", () => {
         f.env.OPENCLAW_CONFIG_PATH!,
         JSON.stringify({ worktreeAcceleration: acceleration }),
       );
+      const preload = join(f.root, "native-provision-imports.mjs");
+      writeFileSync(
+        preload,
+        `import { registerHooks } from "node:module";
+if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
+  registerHooks({ load(url, context, nextLoad) {
+    if (url.endsWith("/src/config/config.ts")) {
+      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    }
+    return nextLoad(url, context);
+  } });
+}
+`,
+      );
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
       const parent = join(f.canonical, ".worktrees");
       const physicalParent = join(f.root, "pr-worktrees");
       rmdirSync(parent);

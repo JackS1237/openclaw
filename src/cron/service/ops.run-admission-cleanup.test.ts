@@ -1,5 +1,6 @@
 // Queued cron reservation cleanup regressions across every trigger.
 import { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
@@ -14,6 +15,11 @@ import {
   getTotalQueueSize,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -61,6 +67,96 @@ function observeCronJobWrites(
 }
 
 describe("cron service run admission cleanup", () => {
+  it.each(["after preflight", "while awaiting root admission"] as const)(
+    "rejects queue acceptance when the caller closes %s",
+    async (boundary) => {
+      vi.useRealTimers();
+      resetGatewayWorkAdmission();
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+      const job = createDueIsolatedJob({
+        id: "unaccepted-queued-run",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const before = await loadCronStore(store.storePath);
+      const controller = new AbortController();
+      const preflightObserved = createDeferred();
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const onEvent = vi.fn();
+      const state = createCronRegressionState({
+        storePath: store.storePath,
+        nowMs: () => dueAt,
+        runIsolatedAgentJob,
+        onEvent,
+      });
+      const suspension =
+        boundary === "while awaiting root admission"
+          ? expectDefined(
+              tryBeginGatewaySuspendAdmission(() => {}),
+              "suspension unavailable",
+            )
+          : undefined;
+      if (suspension) {
+        expect(suspension.commit()).toBe(true);
+      }
+      const requestRoot =
+        boundary === "after preflight"
+          ? expectDefined(tryBeginGatewayRootWorkAdmission(), "request root unavailable")
+          : undefined;
+      let observed = false;
+      const commitGuard = () => {
+        controller.signal.throwIfAborted();
+        if (!observed) {
+          observed = true;
+          queueMicrotask(() => {
+            if (boundary === "after preflight") {
+              controller.abort(new Error("queue request cancelled"));
+            }
+            preflightObserved.resolve();
+          });
+        }
+      };
+      const enqueue = () => enqueueRun(state, job.id, "force", { commitGuard });
+      const pending = requestRoot ? requestRoot.run(enqueue) : enqueue();
+      let settled = false;
+      const outcome = pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await preflightObserved.promise;
+        if (suspension) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).toBe(false);
+          controller.abort(new Error("queue request cancelled"));
+          suspension.release();
+        }
+        await expect(pending).rejects.toThrow("queue request cancelled");
+        await outcome;
+        expect(getTotalQueueSize()).toBe(0);
+        expect(await loadCronStore(store.storePath)).toEqual(before);
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        suspension?.release();
+        requestRoot?.release();
+        await outcome;
+        clearCommandLane(CommandLane.Cron);
+        stop(state);
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it("clears the exact running marker when a manual run is superseded", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const startedAt = Date.parse("2026-02-06T10:05:01.500Z");

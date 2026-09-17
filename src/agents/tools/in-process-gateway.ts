@@ -34,6 +34,7 @@ import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-conte
 import { callGatewayTool } from "./gateway.js";
 
 type InProcessGatewayCallOptions = {
+  onExecution?: (execution: Promise<void>) => void;
   resolveGatewayContext?: GatewayContextResolver;
   sessionMutationCommitGuard?: () => void;
   signal?: AbortSignal;
@@ -353,6 +354,7 @@ async function callInProcessGatewayToolBound<T>(
           ...(agentToolCaller ? { agentToolCaller } : {}),
           ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
           ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
+          ...(options.onExecution ? { onExecution: options.onExecution } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
           ...(options.timeoutMs !== undefined && options.timeoutMs !== null
             ? { timeoutMs: options.timeoutMs }

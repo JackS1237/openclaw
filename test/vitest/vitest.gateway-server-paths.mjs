@@ -3,6 +3,7 @@ export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway
 
 // Native database consumers retain the Gateway runner and setup in forked processes.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.test.ts",
   "src/gateway/gateway-code-mode-clock.test.ts",
@@ -51,7 +52,9 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
+  "src/gateway/session-utils.agent-models.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
+  "src/gateway/session-utils.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
@@ -97,6 +100,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
+  "src/gateway/server.xai-fallback.test.ts",
 ];
 
 export const gatewayServerExcludedTestFiles = [

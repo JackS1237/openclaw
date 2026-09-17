@@ -76,6 +76,11 @@ import {
   summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
+import {
+  listAgentProvenanceInDatabase,
+  readAgentProvenanceInDatabase,
+} from "./agent-provenance.kernel.js";
+import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import {
   openClawStateDatabaseCache,
@@ -418,6 +423,12 @@ function createSharedStateWorkerBackend(
         path: context.databasePath,
         env: getSqliteWorkerStateContext().environment,
       };
+      if (command.type === "agentProvenance.read" || command.type === "agentProvenance.list") {
+        ensureAgentProvenanceSchema(writeOptions);
+        return command.type === "agentProvenance.read"
+          ? readAgentProvenanceInDatabase(database.db, command.input.agentId)
+          : listAgentProvenanceInDatabase(database.db);
+      }
       if (command.type === "sessionState.recordGoalChange") {
         return runOpenClawStateWriteTransaction(
           ({ db }) =>

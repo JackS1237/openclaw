@@ -190,4 +190,69 @@ describe("Codex finalization generation ownership", () => {
     expect(bindingStore.mutate).toHaveBeenCalled();
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
+
+  it("settles an explicitly aborted resumed attempt after native terminal cleanup", async () => {
+    const sessionFile = path.join(tempDir, "resumed-abort.jsonl");
+    const workspaceDir = path.join(tempDir, "resumed-abort-workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const bindingStore = createCodexTestBindingStore();
+    await bindingStore.mutate(
+      {
+        kind: "session",
+        agentId: "main",
+        sessionKey: params.sessionKey!,
+        sessionId: params.sessionId,
+      },
+      {
+        kind: "set",
+        binding: {
+          threadId: "thread-existing",
+          cwd: workspaceDir,
+          dynamicToolsFingerprint: "[]",
+          webSearchThreadConfigFingerprint: JSON.stringify({
+            "features.standalone_web_search": false,
+            web_search: "disabled",
+          }),
+          historyCoveredThrough: new Date(1).toISOString(),
+        },
+      },
+    );
+    const harness = createResumeHarness();
+    const run = runCodexAppServerAttempt(params, { bindingStore });
+    const outcome = run.then(
+      (result) => ({ terminal: readAttemptTerminal(result) }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await Promise.race([
+        harness.waitForMethod("turn/start"),
+        run.then(() => {
+          throw new Error("Resumed attempt settled before turn/start");
+        }),
+      ]);
+      abort.abort("cancel resumed attempt");
+      await harness.waitForMethod("turn/interrupt");
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-existing",
+          turn: { id: "turn-1", status: "interrupted" },
+        },
+      });
+      await expect(outcome).resolves.toMatchObject({
+        terminal: { aborted: true, timedOut: false, promptError: null },
+      });
+      expect(harness.requests).toContainEqual({
+        method: "thread/backgroundTerminals/list",
+        params: { threadId: "thread-existing" },
+      });
+      expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+      expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
+    } finally {
+      abort.abort("test cleanup");
+      await outcome;
+    }
+  });
 });
