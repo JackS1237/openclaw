@@ -1,34 +1,35 @@
 // Trajectory runtime tests cover event recording and runtime file handling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  inspectOpenClawAgentDatabaseOwner,
+} from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
-import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import {
+  loadSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEventRowsSync,
+} from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-runtime-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 afterEach(() => {
   vi.useRealTimers();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 function expectTrajectoryRuntimeRecorder(
@@ -91,7 +92,7 @@ describe("trajectory runtime", () => {
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
@@ -130,11 +131,50 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("retains a failed SQLite flush batch for the next successful persistence attempt", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-trajectory-retry-"), "shared.sqlite");
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:retry",
+      sessionId: "retry-session",
+      storePath,
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = expectTrajectoryRuntimeRecorder(
+      createTrajectoryRuntimeRecorder({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+      }),
+    );
+    recorder.recordEvent("before-failure");
+    const failure = new Error("synthetic SQLite persistence failure");
+    const store = await import("./runtime-store.sqlite.js");
+    const append = vi
+      .spyOn(store, "appendSqliteTrajectoryRuntimeEvents")
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+    try {
+      await expect(recorder.flush()).rejects.toBe(failure);
+      expect(recorder.describeFlushState()).toContain("pendingRows=1");
+    } finally {
+      append.mockRestore();
+    }
+    recorder.recordEvent("after-failure");
+    await recorder.flush();
+    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
+      "before-failure",
+      "after-failure",
+    ]);
+    expect(recorder.describeFlushState()).toBeUndefined();
+  });
+
   it("records runtime events for the canonical session-key target the dispatcher passes", async () => {
     // Attempt dispatch stopped passing legacy `sqlite:` markers and now hands
     // the canonical session key plus a complete target. Recording must not
     // depend on the marker, or every harness capture silently disappears.
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
@@ -158,8 +198,106 @@ describe("trajectory runtime", () => {
     ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
   });
 
+  it.each(["caller-env", "cwd"] as const)(
+    "keeps queued logical-agent trajectory writes on their captured shared store (%s)",
+    async (change) => {
+      const callerRoot = tempDirs.make("openclaw-trajectory-caller-root-");
+      const originalState = path.join(callerRoot, "state");
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(callerRoot);
+      try {
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: change === "cwd" ? "state" : originalState,
+        };
+        const capturedEnv = { ...env, OPENCLAW_STATE_DIR: originalState };
+        const otherState = tempDirs.make("openclaw-trajectory-other-state-");
+        const storePath = path.join(tempDirs.make("openclaw-shared-trajectory-"), "shared.sqlite");
+        await replaceSessionEntry(
+          { agentId: "main", env: capturedEnv, sessionKey: "agent:main:unrelated", storePath },
+          { sessionId: "unrelated", updatedAt: 1 },
+        );
+        const target = {
+          agentId: "ops",
+          sessionKey: "agent:ops:trace",
+          sessionId: "ops-session",
+          storePath,
+          env: capturedEnv,
+        };
+        await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const recorder = expectTrajectoryRuntimeRecorder(
+          createTrajectoryRuntimeRecorder({
+            env,
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            sessionTarget: target,
+          }),
+        );
+        recorder.recordEvent("session.started");
+        recorder.recordEvent("session.ended", { status: "success" });
+        closeOpenClawAgentDatabasesForTest();
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const reservation = runOpenClawAgentWorkerWrite(
+          { agentId: "main", env: capturedEnv, path: storePath },
+          async () => {
+            entered.resolve();
+            await release.promise;
+          },
+        );
+        let flush: Promise<void> | undefined;
+        try {
+          await entered.promise;
+          flush = recorder.flush();
+          void flush.catch(() => {});
+          if (change === "cwd") {
+            cwd.mockReturnValue(otherState);
+          } else {
+            env.OPENCLAW_STATE_DIR = otherState;
+          }
+          await setImmediate();
+          expect(recorder.describeFlushState()).toContain("pendingRows=2");
+          release.resolve();
+          await reservation;
+          await flush;
+        } finally {
+          release.resolve();
+          await reservation;
+          await flush?.catch(() => {});
+        }
+        expect(fs.readdirSync(otherState)).toEqual([]);
+        expect(
+          (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
+        ).toEqual(["session.started", "session.ended"]);
+        expect(loadSqliteTrajectoryRuntimeEventRowsSync({ ...target, tailEvents: 1 })).toEqual([
+          expect.objectContaining({
+            seq: 1,
+            event: expect.objectContaining({
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              type: "session.ended",
+            }),
+          }),
+        ]);
+        expect(inspectOpenClawAgentDatabaseOwner(storePath)).toMatchObject({
+          status: "owned",
+          agentId: "main",
+        });
+        expect(
+          await loadSqliteTrajectoryRuntimeEvents({
+            agentId: "main",
+            env: capturedEnv,
+            sessionId: "unrelated",
+            storePath,
+          }),
+        ).toEqual([]);
+      } finally {
+        cwd.mockRestore();
+      }
+    },
+  );
+
   it("rejects a legacy SQLite marker for another session", () => {
-    const storePath = path.join(makeTempDir(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
 
     expect(
       createTrajectoryRuntimeRecorder({
@@ -179,7 +317,7 @@ describe("trajectory runtime", () => {
   ])(
     "rejects a complete target that conflicts with the %s",
     (_label, sessionKey, agentId, targetKey) => {
-      const storePath = path.join(makeTempDir(), "sessions.json");
+      const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
 
       expect(
         createTrajectoryRuntimeRecorder({
@@ -197,7 +335,7 @@ describe("trajectory runtime", () => {
   );
 
   it("rejects a complete target whose key maps to another session", async () => {
-    const storePath = path.join(makeTempDir(), "sessions.json");
+    const storePath = path.join(tempDirs.make("openclaw-trajectory-runtime-"), "sessions.json");
     const sessionKey = "agent:main:stored-session";
     await replaceSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -222,7 +360,7 @@ describe("trajectory runtime", () => {
   });
 
   it("stores bounded oversized runtime events in SQLite", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     const sessionKey = "agent:main:main";
     const usage = {
@@ -379,7 +517,7 @@ describe("trajectory runtime", () => {
     ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
-  it("drops oversized preserved fields when needed to keep runtime events bounded", () => {
+  it("preserves stopReason while dropping oversized preserved fields to keep runtime events bounded", () => {
     const writes: string[] = [];
     const oversizedUsage = Object.fromEntries(
       Array.from({ length: 64 }, (_value, index) => [`field-${index}`, "x".repeat(5_000)]),
@@ -399,8 +537,19 @@ describe("trajectory runtime", () => {
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
+      threadId: "thread-compact",
+      turnId: "turn-compact",
+      timedOut: true,
+      yieldDetected: false,
+      aborted: true,
+      promptError: "terminal prompt error",
       usage: oversizedUsage,
       promptCache,
+      stopReason: "length",
+      assistantTexts: Array.from(
+        { length: 12 },
+        (_value, index) => `assistant-${index} ${"x".repeat(32_000)}`,
+      ),
       messagesSnapshot: [{ role: "user", content: "x".repeat(32_000) }],
     });
 
@@ -409,11 +558,19 @@ describe("trajectory runtime", () => {
     expect(parsed.data).toMatchObject({
       truncated: true,
       reason: "trajectory-event-size-limit",
+      threadId: "thread-compact",
+      turnId: "turn-compact",
+      timedOut: true,
+      yieldDetected: false,
+      aborted: true,
+      promptError: "terminal prompt error",
       promptCache,
+      stopReason: "length",
     });
     expect(parsed.data.usage).toBeUndefined();
+    expect(parsed.data.assistantTexts).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(
-      expect.arrayContaining(["usage", "messagesSnapshot"]),
+      expect.arrayContaining(["usage", "assistantTexts", "messagesSnapshot"]),
     );
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),

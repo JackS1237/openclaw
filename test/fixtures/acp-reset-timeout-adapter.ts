@@ -36,7 +36,13 @@ type AdapterOptions = {
   controlDir: string;
 };
 
+const AVAILABLE_MODES = [
+  { id: "default", name: "Default" },
+  { id: "plan", name: "Plan" },
+];
+
 type SessionState = {
+  mode: string;
   promptAbort?: AbortController;
 };
 
@@ -126,24 +132,30 @@ class ResetTimeoutProofAgent implements Agent {
   async authenticate(): Promise<void> {}
 
   async setSessionMode(params: { sessionId: SessionId; modeId: string }): Promise<void> {
+    const session = this.sessions.get(params.sessionId);
+    if (!session) {
+      throw RequestError.resourceNotFound(params.sessionId);
+    }
     logEvent("set_mode_start", { sessionId: params.sessionId, mode: params.modeId });
     if (markerExists("hang-set-mode")) {
       await waitForMarker("release-set-mode");
     }
-    logEvent("set_mode_end", { sessionId: params.sessionId, mode: params.modeId });
+    session.mode = params.modeId;
+    logEvent("set_mode_end", { sessionId: params.sessionId, mode: session.mode });
   }
 
   async newSession(): Promise<NewSessionResponse> {
     const sessionId = `${instanceId}-session-${randomUUID().slice(0, 8)}`;
-    this.sessions.set(sessionId, {});
+    this.sessions.set(sessionId, { mode: "default" });
     logEvent("session_create", { sessionId });
-    return { sessionId };
+    return { sessionId, modes: { currentModeId: "default", availableModes: AVAILABLE_MODES } };
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    this.sessions.set(params.sessionId, this.sessions.get(params.sessionId) ?? {});
+    const session = this.sessions.get(params.sessionId) ?? { mode: "default" };
+    this.sessions.set(params.sessionId, session);
     logEvent("session_load", { sessionId: params.sessionId });
-    return {};
+    return { modes: { currentModeId: session.mode, availableModes: AVAILABLE_MODES } };
   }
 
   async prompt(params: PromptRequest): Promise<PromptResponse> {
@@ -154,7 +166,7 @@ class ResetTimeoutProofAgent implements Agent {
     const text = promptText(params.prompt);
     const promptAbort = new AbortController();
     session.promptAbort = promptAbort;
-    logEvent("turn_start", { sessionId: params.sessionId, text });
+    logEvent("turn_start", { sessionId: params.sessionId, text, mode: session.mode });
 
     try {
       if (text === "hold-turn") {
@@ -168,7 +180,13 @@ class ResetTimeoutProofAgent implements Agent {
           content: { type: "text", text: reply },
         },
       });
-      logEvent("turn_end", { sessionId: params.sessionId, text, reply, stopReason: "end_turn" });
+      logEvent("turn_end", {
+        sessionId: params.sessionId,
+        text,
+        reply,
+        mode: session.mode,
+        stopReason: "end_turn",
+      });
       return { stopReason: "end_turn" };
     } catch (error) {
       if (error instanceof PromptCancelledError || promptAbort.signal.aborted) {

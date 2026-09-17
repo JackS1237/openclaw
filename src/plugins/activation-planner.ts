@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import {
   hasExplicitManifestOwnerTrust,
   isBundledManifestOwner,
@@ -35,6 +35,7 @@ type PluginActivationPlannerHintReason =
 
 type PluginActivationPlannerManifestReason =
   | "manifest-channel-owner"
+  | "manifest-cli-command-owner"
   | "manifest-command-alias"
   | "manifest-hook-owner"
   | "manifest-provider-owner"
@@ -61,6 +62,7 @@ type PluginActivationPlan = {
 type ResolveManifestActivationPlanParams = {
   trigger: PluginActivationPlannerTrigger;
   config?: OpenClawConfig;
+  normalizedConfig?: NormalizedPluginsConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   origin?: PluginOrigin;
@@ -83,7 +85,8 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig =
+    params.normalizedConfig ?? normalizePluginsConfig(params.config?.plugins);
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {
@@ -194,6 +197,13 @@ function listCommandTriggerReasons(
   return dedupeReasons([
     listHasNormalizedValue(plugin.activation?.onCommands, command, normalizeCommandId)
       ? "activation-command-hint"
+      : null,
+    listHasNormalizedValue(
+      plugin.cliCommands?.map((descriptor) => descriptor.name),
+      command,
+      normalizeCommandId,
+    )
+      ? "manifest-cli-command-owner"
       : null,
     listHasNormalizedValue(
       (plugin.commandAliases ?? []).flatMap((alias) => alias.cliCommand ?? alias.name),

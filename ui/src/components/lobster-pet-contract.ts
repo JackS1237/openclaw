@@ -1,3 +1,7 @@
+import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
+
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
@@ -75,8 +79,6 @@ export type LobsterPetAccessory =
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
-
 export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
 export type LobsterPetLook = {
@@ -89,7 +91,6 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
-  build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
   // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
@@ -125,7 +126,7 @@ export function lobsterPetSeed(sessionKey: string): number {
 export function resolveLobsterRunOutcome(
   sessions:
     | ReadonlyArray<{
-        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        status?: SessionRunStatus;
         endedAt?: number | null;
         lastActivityAt?: number | null;
         updatedAt?: number | null;
@@ -156,11 +157,10 @@ export function resolveLobsterRunOutcome(
 
 export function resolveLobsterPetMode(
   connected: boolean,
-  sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
+  sessions: ReadonlyArray<{ hasActiveRun?: boolean; status?: SessionRunStatus }> | null | undefined,
 ): LobsterPetMode {
   if (!connected) {
     return "offline";
   }
-  return sessions?.some((row) => row.hasActiveRun === true) ? "busy" : "idle";
+  return sessions?.some(isSessionRunActive) ? "busy" : "idle";
 }
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";

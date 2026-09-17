@@ -7,7 +7,7 @@ import {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
   LEGACY_MEMORY_FTS_MATCH_TABLE,
@@ -22,7 +22,6 @@ export type LegacyMemorySidecarSource = {
   agentDatabasePath: string;
 };
 
-export const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_MEMORY_SIDECAR_SCHEMA = "legacy_memory_sidecar";
 const LEGACY_MEMORY_VECTOR_TABLE = "chunks_vec";
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";

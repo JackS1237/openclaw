@@ -31,6 +31,8 @@ export function normalizeDiagnosticLane(value: string | undefined, fallback = "u
   return LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE.test(lane) ? lane : fallback;
 }
 
+export { createSubsystemLogger } from "../logging/subsystem.js";
+
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
   DiagnosticEventMetadata,
@@ -40,6 +42,7 @@ export type {
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
+  areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -53,6 +56,8 @@ export {
 } from "../infra/diagnostic-events.js";
 export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+// Shipped plugin contract: this formatter serializes diagnostic correlation
+// context. Core outbound propagation resolves exporter-owned context internally.
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

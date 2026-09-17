@@ -1,12 +1,13 @@
 /** Tests that reset actor rotation fences every ACP metadata-writing operation. */
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   AcpSessionManager,
   baseCfg,
-  createDeferred,
   createRuntime,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  installMutableAcpSessionMetaUpsert,
   mockCallArg,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
@@ -291,5 +292,32 @@ describe("AcpSessionManager actor epoch fencing", () => {
     });
     expect(persistedMeta?.runtimeSessionName).toBe("runtime-2");
     expect(persistedMeta?.identity?.acpxSessionId).toBe("backend-2");
+  });
+  it("rejects a stale discard token without removing the successor runtime", async () => {
+    const state = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+    installMutableAcpSessionMetaUpsert({ currentMeta: undefined });
+    const manager = new AcpSessionManager();
+    const input = { cfg: baseCfg, sessionKey, agent: "codex", mode: "persistent" as const };
+    await manager.initializeSession(input);
+    const old = manager.captureSessionRuntimeOwnership(input);
+    await manager.forceDiscardSessionRuntime({
+      ...input,
+      reason: "reset",
+      isCurrent: old.isCurrent,
+    });
+    const fresh = await manager.initializeSession(input);
+    const closesBefore = state.close.mock.calls.length;
+    await expect(
+      manager.forceDiscardSessionRuntime({
+        ...input,
+        reason: "late reset",
+        isCurrent: old.isCurrent,
+      }),
+    ).rejects.toMatchObject({ detailCode: "SESSION_ACTOR_SUPERSEDED" });
+    expect(state.close.mock.calls.length).toBe(closesBefore);
+    expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(1);
+    expect(fresh.handle).toBeDefined();
+    old.release();
   });
 });

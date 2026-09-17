@@ -1,7 +1,7 @@
-// Nextcloud Talk monitor shutdown tests cover composite abort ownership.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 
@@ -25,6 +25,10 @@ describe("Nextcloud Talk monitor abort", () => {
     }));
     const monitor = await monitorNextcloudTalkProvider({
       config: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+          allowRealIpFallback: true,
+        },
         channels: {
           "nextcloud-talk": {
             baseUrl: "https://cloud.example.com",
@@ -32,7 +36,7 @@ describe("Nextcloud Talk monitor abort", () => {
           },
         },
       },
-      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
+      runtime: createRuntimeSpies(),
       abortSignal: abortController.signal,
       statusSink,
       createSpool,
@@ -42,7 +46,20 @@ describe("Nextcloud Talk monitor abort", () => {
     expect(createSpool).toHaveBeenCalledWith(
       expect.objectContaining({ abortSignal: abortController.signal }),
     );
-    expect(statusSink).toHaveBeenCalledExactlyOnceWith({ lifecycle: "ready" });
+    expect(createServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trustedProxies: ["127.0.0.1"],
+        allowRealIpFallback: true,
+      }),
+    );
+    expect(statusSink).toHaveBeenCalledExactlyOnceWith({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
     abortController.abort();
     await vi.waitFor(() => expect(spoolStop).toHaveBeenCalledOnce());
     await monitor.stop();
@@ -67,7 +84,7 @@ describe("Nextcloud Talk monitor abort", () => {
           },
         },
       },
-      runtime: { error: vi.fn(), log: vi.fn(), exit: vi.fn() as never },
+      runtime: createRuntimeSpies(),
       abortSignal: abortController.signal,
       statusSink,
       createSpool: () => ({

@@ -1,13 +1,11 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listExplicitlyDisabledChannelIdsForConfig,
-  listPotentialConfiguredChannelIds,
-} from "../../../channels/config-presence.js";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
@@ -17,9 +15,9 @@ import {
   resolveWebSearchInstallCatalogEntriesForEnv,
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
-import { asObjectRecord } from "./object.js";
+import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -31,12 +29,6 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   }
 }
 
-function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
-    addConfiguredPluginId(ids, runtime);
-  }
-}
-
 function addConfiguredMemoryEmbeddingProviderPluginIds(
   ids: Set<string>,
   cfg: OpenClawConfig,
@@ -45,13 +37,11 @@ function addConfiguredMemoryEmbeddingProviderPluginIds(
   if (configuredProviderIds.size === 0) {
     return;
   }
-  for (const contract of ["embeddingProviders", "memoryEmbeddingProviders"] as const) {
-    for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-      contract,
-      providerIds: configuredProviderIds,
-    })) {
-      ids.add(pluginId);
-    }
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "embeddingProviders",
+    providerIds: configuredProviderIds,
+  })) {
+    ids.add(pluginId);
   }
 }
 
@@ -102,31 +92,35 @@ export function collectConfiguredPluginIds(
   env?: NodeJS.ProcessEnv,
 ): Set<string> {
   const ids = new Set<string>();
-  const plugins = asObjectRecord(cfg.plugins);
+  const plugins = asNullableRecord(cfg.plugins);
   if (plugins?.enabled === false) {
     return ids;
   }
-  const entries = asObjectRecord(plugins?.entries);
+  const entries = asNullableRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asObjectRecord(entry)?.enabled === false) {
+    if (
+      asNullableRecord(entry)?.enabled === false ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       continue;
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = cfg.tools?.web?.search?.provider;
-  if (cfg.tools?.web?.search?.enabled !== false && typeof searchProvider === "string") {
+  const searchProvider = normalizeOptionalLowercaseString(cfg.tools?.web?.search?.provider);
+  if (cfg.tools?.web?.search?.enabled !== false && searchProvider) {
     const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
     if (installEntry?.pluginId) {
       ids.add(installEntry.pluginId);
     }
-  }
-  if (cfg.tools?.web?.search?.enabled !== false) {
-    // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
+  } else if (cfg.tools?.web?.search?.enabled !== false) {
+    // Only auto-detect from environment credentials when no provider was selected.
     for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
       ids.add(entry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg);
+  for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
     ids.add(pluginId);
   }
@@ -147,9 +141,9 @@ export function collectBlockedPluginIds(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
-  const entries = asObjectRecord(cfg.plugins?.entries);
+  const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (pluginId.trim() && asObjectRecord(entry)?.enabled === false) {
+    if (pluginId.trim() && asNullableRecord(entry)?.enabled === false) {
       ids.add(pluginId.trim());
     }
   }
@@ -160,25 +154,22 @@ export function collectConfiguredChannelIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): Set<string> {
-  const ids = new Set<string>();
-  if (asObjectRecord(cfg.plugins)?.enabled === false) {
-    return ids;
+  if (asNullableRecord(cfg.plugins)?.enabled === false) {
+    return new Set();
   }
-  const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(cfg));
   const candidateChannelIds = listRawChannelPluginCatalogEntries({
     env,
     excludeWorkspace: true,
   }).map((entry) => entry.id);
-  for (const channelId of listPotentialConfiguredChannelIds(cfg, env, {
-    channelIds: candidateChannelIds,
-    includePersistedAuthState: false,
-  })) {
-    const normalized = channelId.trim();
-    if (normalized && !disabled.has(normalized.toLowerCase())) {
-      ids.add(normalized);
-    }
-  }
-  return ids;
+  return new Set(
+    listDoctorConfiguredChannelIds(cfg, {
+      configEntryPolicy: "meaningful",
+      env: env ?? process.env,
+      candidateChannelIds,
+      skipWhenPluginsDisabled: true,
+      excludeExplicitlyDisabled: true,
+    }),
+  );
 }
 
 export function collectEffectiveConfiguredChannelOwnerPluginIds(params: {

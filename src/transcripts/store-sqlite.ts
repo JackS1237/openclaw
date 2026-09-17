@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,7 +8,11 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+} from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 type MeetingTranscriptsDatabase = Pick<
@@ -28,33 +34,139 @@ export function meetingTranscriptDb(db: DatabaseSync) {
   return getNodeSqliteKysely<MeetingTranscriptsDatabase>(db);
 }
 
+export function meetingTranscriptSessionQuery(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+) {
+  return meetingTranscriptDb(database)
+    .selectFrom("meeting_transcript_sessions")
+    .where("session_id", "=", session.sessionId)
+    .where("started_at", "=", session.startedAt);
+}
+
+export function transcriptSummaryInputRevisionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "next_utterance_seq" | "title" | "source_json" | "metadata_json" | "stopped_at"
+  >,
+): string {
+  return JSON.stringify({
+    next_utterance_seq: row.next_utterance_seq,
+    title: row.title,
+    source_json: row.source_json,
+    metadata_json: row.metadata_json,
+    stopped_at: row.stopped_at,
+  });
+}
+
+export function readTranscriptSummaryInputRevision(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).select([
+      "next_utterance_seq",
+      "title",
+      "source_json",
+      "metadata_json",
+      "stopped_at",
+    ]),
+  );
+  // Export bookkeeping is not summary input and must not invalidate a reader.
+  return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
+}
+
+export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+  const rows = executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["session_id", "session_started_at"]),
+  ).rows;
+  return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
+}
+
+export function readRecentStoppedTranscriptSession(
+  database: DatabaseSync,
+  source: TranscriptSourceLocator,
+  stoppedAfter: string,
+  stoppedBefore: string,
+): { session: TranscriptSessionDescriptor; inputRevision: string } | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_sessions")
+      .selectAll()
+      .where("provider_id", "=", source.providerId)
+      .where("stopped_at", ">=", stoppedAfter)
+      .where("stopped_at", "<=", stoppedBefore)
+      .where((eb) =>
+        eb.and(
+          (["accountId", "guildId", "channelId", "meetingUrl", "threadTs", "fileId"] as const).map(
+            (key) =>
+              eb(
+                eb.fn<string | null>("json_extract", [eb.ref("source_json"), eb.val(`$.${key}`)]),
+                source[key] === undefined ? "is" : "=",
+                source[key] ?? null,
+              ),
+          ),
+        ),
+      )
+      .orderBy("stopped_at", "desc")
+      .orderBy("started_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  );
+  return row
+    ? { session: sessionFromRow(row), inputRevision: transcriptSummaryInputRevisionFromRow(row) }
+    : undefined;
+}
+
+export function meetingTranscriptUtteranceQuery(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+) {
+  return meetingTranscriptDb(database)
+    .selectFrom("meeting_transcript_utterances")
+    .where("session_id", "=", session.sessionId)
+    .where("session_started_at", "=", session.startedAt);
+}
+
 function hasExactMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
-  sessionId: string;
-  sessionStartedAt: string;
+  session: TranscriptSessionDescriptor;
   utterance: TranscriptUtterance & { id: string };
 }): boolean {
-  const db = meetingTranscriptDb(params.database);
-  const rows = executeSqliteQuerySync(
-    params.database,
-    db
-      .selectFrom("meeting_transcript_utterances")
-      .selectAll()
-      .where("session_id", "=", params.sessionId)
-      .where("session_started_at", "=", params.sessionStartedAt)
-      .where("utterance_id", "=", params.utterance.id),
-  ).rows;
   const utterance = params.utterance;
-  return rows.some(
-    (row) =>
-      row.started_at === (utterance.startedAt ?? null) &&
-      row.ended_at === (utterance.endedAt ?? null) &&
-      row.speaker_id === (utterance.speaker?.id ?? null) &&
-      row.speaker_label === (utterance.speaker?.label ?? null) &&
-      row.text === utterance.text &&
-      row.final === (utterance.final === undefined ? null : utterance.final ? 1 : 0) &&
-      row.metadata_json === params.metadataJson,
+  // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
+  if (
+    [
+      utterance.startedAt,
+      utterance.endedAt,
+      utterance.speaker?.id,
+      utterance.speaker?.label,
+      utterance.text,
+    ].some((value) => value != null && toUSVString(value) !== value)
+  ) {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      params.database,
+      meetingTranscriptUtteranceQuery(params.database, params.session)
+        .select("sequence")
+        .where("utterance_id", "=", utterance.id)
+        .where("started_at", "is", utterance.startedAt ?? null)
+        .where("ended_at", "is", utterance.endedAt ?? null)
+        .where("speaker_id", "is", utterance.speaker?.id ?? null)
+        .where("speaker_label", "is", utterance.speaker?.label ?? null)
+        .where("text", "=", utterance.text)
+        .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
+        .where("metadata_json", "is", params.metadataJson)
+        .limit(1),
+    ),
   );
 }
 
@@ -72,8 +184,7 @@ export function appendMeetingTranscriptUtterance(params: {
     hasExactMeetingTranscriptUtterance({
       database,
       metadataJson: params.metadataJson,
-      sessionId: session.sessionId,
-      sessionStartedAt: session.startedAt,
+      session,
       utterance: { ...utterance, id: utterance.id },
     })
   ) {
@@ -81,11 +192,7 @@ export function appendMeetingTranscriptUtterance(params: {
   }
   const stored = executeSqliteQueryTakeFirstSync(
     database,
-    db
-      .selectFrom("meeting_transcript_sessions")
-      .select("next_utterance_seq")
-      .where("session_id", "=", session.sessionId)
-      .where("started_at", "=", session.startedAt),
+    meetingTranscriptSessionQuery(database, session).select("next_utterance_seq"),
   );
   if (!stored) {
     throw new Error(`transcripts session not found: ${session.sessionId}`);
@@ -121,13 +228,15 @@ function parseOptionalJsonRecord(value: string | null): Record<string, unknown> 
   if (!value) {
     return undefined;
   }
-  const parsed = JSON.parse(value) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(JSON.parse(value));
 }
 
-export function sessionFromRow(row: MeetingTranscriptSessionRow): TranscriptSessionDescriptor {
+export function sessionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "session_id" | "source_json" | "metadata_json" | "started_at" | "title" | "stopped_at"
+  >,
+): TranscriptSessionDescriptor {
   const source = parseOptionalJsonRecord(row.source_json);
   const metadata = parseOptionalJsonRecord(row.metadata_json);
   if (!source || typeof source.providerId !== "string") {

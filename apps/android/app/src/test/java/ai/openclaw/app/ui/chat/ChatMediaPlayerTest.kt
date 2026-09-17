@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -19,21 +18,8 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class ChatMediaPlayerTest {
-  private class FakePlayer(
-    var positionMs: Long = 0L,
-  ) {
-    var paused = false
+  private class FakePlayer {
     var released = false
-    var playCount = 0
-
-    fun pause() {
-      paused = true
-    }
-
-    fun play() {
-      paused = false
-      playCount += 1
-    }
 
     fun release() {
       released = true
@@ -51,7 +37,7 @@ class ChatMediaPlayerTest {
   fun claimHandoffReleasesPreviousPlaybackInstance() {
     val first = FakePlayer()
     val second = FakePlayer()
-    val claims = ChatMediaPlaybackClaims<FakePlayer>(FakePlayer::pause, FakePlayer::release)
+    val claims = ChatMediaPlaybackClaims<FakePlayer>(pause = {}, release = FakePlayer::release)
 
     claims.claim(first)
     claims.claim(second)
@@ -62,20 +48,14 @@ class ChatMediaPlayerTest {
   }
 
   @Test
-  fun pauseThenPlayResumesPositionWithoutRedownload() {
-    var downloadCount = 0
-    val player = FakePlayer(positionMs = 4_200L).also { downloadCount += 1 }
-    val claims = ChatMediaPlaybackClaims<FakePlayer>(FakePlayer::pause, FakePlayer::release)
+  fun pauseThenReclaimRetainsPlaybackInstance() {
+    val player = FakePlayer()
+    val claims = ChatMediaPlaybackClaims<FakePlayer>(pause = {}, release = FakePlayer::release)
 
     claims.claim(player)
     claims.pauseIf { it === player }
     claims.claim(player)
-    player.play()
 
-    assertEquals(1, downloadCount)
-    assertEquals(4_200L, player.positionMs)
-    assertEquals(1, player.playCount)
-    assertFalse(player.paused)
     assertFalse(player.released)
     assertSame(player, claims.active)
   }
@@ -140,14 +120,23 @@ class ChatMediaPlayerTest {
     var loadCount = 0
 
     composeRule.setContent {
-      ChatMessageBubble(
-        message =
-          ChatMessage(
-            id = "legacy-media",
-            role = "assistant",
-            content = listOf(audio, video),
-            timestampMs = 1,
-          ),
+      ChatBubble(
+        messageId = "legacy-media",
+        entryId = null,
+        role = "assistant",
+        live = false,
+        content = listOf(audio, video),
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = false,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = false,
+        resolveInlineWidgetResource = { _, _ -> null },
+        loadImageArtifact = { null },
         loadMediaArtifact = { _, _, _ ->
           loadCount += 1
           null

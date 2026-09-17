@@ -1,15 +1,21 @@
-// Openai API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
+  ProviderFastModePolicyContext,
   ProviderModelRouteCandidate,
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
   ProviderNormalizeModelCatalogIdContext,
+  ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -21,8 +27,21 @@ import {
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
+import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
+    supportsOpenAIResponsesFastMode(ctx)
+  );
+}
 
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";
@@ -41,11 +60,7 @@ type OpenAIResolveSingleModelRouteContext = Omit<
 };
 
 function normalizeOptionalRouteApi(value: ModelApi | null | undefined): ModelApi | undefined {
-  return typeof value === "string" && value.trim() ? (value.trim() as ModelApi) : undefined;
-}
-
-function normalizeOptionalRouteBaseUrl(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value) as ModelApi | undefined;
 }
 
 /** Canonical logical id for OpenAI catalog projection. */
@@ -53,6 +68,14 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
   return params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
+}
+
+export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  return (
+    params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
+    params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
+    params.responseModelId === OPENAI_GPT_56_SOL_MODEL_ID
+  );
 }
 
 /** Resolves authored OpenAI provider config without activating the runtime plugin. */
@@ -111,6 +134,28 @@ export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelCon
   return null;
 }
 
+export function projectRealtimeVoicePublicProjection(ctx: {
+  providerConfig: Record<string, unknown>;
+  config: Record<string, unknown>;
+}): {
+  config: Record<string, unknown>;
+  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+} {
+  const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
+  const modelId = typeof model === "string" ? model : undefined;
+  if (!isOpenAIGptLiveModel(modelId) || isSupportedOpenAIGptLiveModel(modelId)) {
+    return { config: ctx.config };
+  }
+  const { model: _model, ...publicConfig } = ctx.config;
+  return {
+    config: publicConfig,
+    clientHints: {
+      modelSource: "gateway",
+      gatewayRelaySupported: false,
+    },
+  };
+}
+
 function firstRouteBaseUrl(...values: unknown[]): unknown {
   for (const value of values) {
     if (typeof value === "string") {
@@ -127,7 +172,7 @@ function firstRouteBaseUrl(...values: unknown[]): unknown {
 }
 
 function concreteBaseUrl(value: unknown, fallback: string): string {
-  return normalizeOptionalRouteBaseUrl(value) ?? fallback;
+  return normalizeOptionalString(value) ?? fallback;
 }
 
 function resolveOpenAIEnvironmentBaseUrl(
@@ -344,9 +389,8 @@ function resolveSingleObservedModelRoute(
 
   const modelId = normalizeOpenAIModelRouteId(context.modelId);
   const sourceBaseUrl = effectiveBaseUrl;
-  // An authored Completions adapter is a concrete transport contract, not an
-  // alias for Responses. Codex does not execute that adapter, so preserve it
-  // and let the OpenClaw runtime own the request.
+  // Retain Completions for API-key callers; older configs also used this
+  // adapter while Codex selected subscription credentials independently.
   const platformApi =
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
@@ -376,6 +420,16 @@ function resolveSingleObservedModelRoute(
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
 
+  const legacyCompletionsDefault =
+    effectiveApi === OPENAI_COMPLETIONS_API && requestTransportOverrides === "none";
+  if (dualRoute && (!configuredRoute || legacyCompletionsDefault)) {
+    return {
+      kind: "routes",
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
+      routes: [platformRoute, chatGPTRoute],
+    };
+  }
+
   // Observed catalog transport is not authored route intent. Known model
   // contracts stay stable regardless of which official sibling row was seen.
   if (!configuredRoute) {
@@ -384,13 +438,6 @@ function resolveSingleObservedModelRoute(
     }
     if (platformOnly) {
       return route(platformRoute, sourceBaseUrl);
-    }
-    if (dualRoute) {
-      return {
-        kind: "routes",
-        defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute, sourceBaseUrl),
-        routes: [platformRoute, chatGPTRoute],
-      };
     }
   }
 
@@ -528,7 +575,7 @@ function resolveAuthoredObservedFallback(observedRoutes: readonly ProviderModelR
 }
 
 /** Resolves every physical row for one logical OpenAI model in provider order. */
-export function resolveModelRoutes(
+function resolveModelRouteCandidates(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
   const observedRoutes = (context.observedRoutes ?? []).filter(
@@ -593,6 +640,47 @@ export function resolveModelRoutes(
   };
 }
 
+/** Apply billing intent independently of which runtimes can execute each candidate. */
+export function resolveModelRoutes(
+  context: ProviderResolveModelRoutesContext,
+): ProviderModelRouteResolution {
+  const resolution = resolveModelRouteCandidates(context);
+  if (resolution.kind !== "routes" || resolution.routes.length < 2) {
+    return resolution;
+  }
+  const intent = context.routeIntent;
+  const requirement = intent?.authRequirement;
+  if (requirement && intent.source === "explicit") {
+    const selected = resolution.routes.find(
+      (candidate) => candidate.authRequirement === requirement,
+    );
+    if (selected) {
+      return route(selected);
+    }
+  }
+  const explicitRuntimeId =
+    intent?.source === "explicit" ? intent.runtimeId?.trim().toLowerCase() : undefined;
+  if (explicitRuntimeId) {
+    const compatible = resolution.routes.filter((candidate) =>
+      candidate.runtimePolicy?.compatibleIds.includes(explicitRuntimeId),
+    );
+    const [first, ...rest] = compatible;
+    if (first && compatible.length < resolution.routes.length) {
+      return {
+        kind: "routes",
+        routes: [first, ...rest],
+        defaultRuntimeId: explicitRuntimeId,
+      };
+    }
+  }
+  const preferredAuthRequirement =
+    requirement ?? (intent?.runtimeId === OPENAI_AGENT_RUNTIME_ID ? "api-key" : "subscription");
+  return {
+    ...resolution,
+    preferredAuthRequirement,
+  };
+}
+
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
   return params.providerConfig;
 }
@@ -605,6 +693,7 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
         params.agentRuntime,
         params.compat,
         params.api,
+        params.thinkingLevelMap,
       );
     default:
       return null;

@@ -1,6 +1,4 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./cli-shared.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import {
   captureStdout,
@@ -9,15 +7,151 @@ import {
   parseStdoutJson,
   setupCli,
 } from "./test-support/cli-harness.js";
+import { meetSession } from "./test-support/fixtures.test-helpers.js";
 
 describe("google-meet CLI", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    process.exitCode = undefined;
   });
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
+  });
+
+  describe.each(["gateway", "local"] as const)("lifecycle results through %s", (route) => {
+    const cases: Array<{
+      command: "leave" | "speak";
+      name: string;
+      result: Awaited<ReturnType<GoogleMeetRuntime["speak"]>> & { browserLeft?: boolean };
+      output?: string;
+      error?: string;
+    }> = [
+      {
+        command: "leave",
+        name: "missing session",
+        result: { found: false, spoken: false },
+        error: "session not found",
+      },
+      {
+        command: "leave",
+        name: "completed",
+        result: { found: true, spoken: false },
+        output: "left meet_1\n",
+      },
+      {
+        command: "leave",
+        name: "browser still present",
+        result: { found: true, spoken: false, browserLeft: false },
+        output:
+          "left meet_1, but the browser participant may still be in the call; check session notes\n",
+      },
+      {
+        command: "speak",
+        name: "missing session takes precedence over blocked speech",
+        result: {
+          found: false,
+          spoken: false,
+          session: meetSession({ chrome: { health: { speechBlockedMessage: "blocked" } } }),
+        },
+        error: "session not found",
+      },
+      {
+        command: "speak",
+        name: "explicit blocked message",
+        result: {
+          found: true,
+          spoken: false,
+          session: meetSession({
+            chrome: { health: { speechBlockedMessage: "microphone muted" } },
+          }),
+        },
+        error: "microphone muted",
+      },
+      {
+        command: "speak",
+        name: "empty blocked message",
+        result: {
+          found: true,
+          spoken: false,
+          session: meetSession({ chrome: { health: { speechBlockedMessage: "" } } }),
+        },
+        error: "",
+      },
+      {
+        command: "speak",
+        name: "missing blocked message",
+        result: { found: true, spoken: false },
+        error: "session has no active realtime audio bridge",
+      },
+      {
+        command: "speak",
+        name: "completed",
+        result: { found: true, spoken: true },
+        output: "speaking on meet_1\n",
+      },
+    ];
+
+    it.each(cases)("$command: $name", async ({ command, result, output, error }) => {
+      const calls: string[] = [];
+      const leave = vi.fn<GoogleMeetRuntime["leave"]>(async () => {
+        calls.push("leave");
+        return result;
+      });
+      const speak = vi.fn<GoogleMeetRuntime["speak"]>(async () => {
+        calls.push("speak");
+        return result;
+      });
+      const ensureRuntime = vi.fn(async () => {
+        calls.push("runtime");
+        return { leave, speak } as unknown as GoogleMeetRuntime;
+      });
+      const callGatewayFromCli = vi.fn<
+        NonNullable<Parameters<typeof setupCli>[0]["callGatewayFromCli"]>
+      >(async () => {
+        calls.push("gateway");
+        if (route === "local") {
+          throw Object.assign(new Error(`unknown method: googlemeet.${command}`), {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            retryable: false,
+          });
+        }
+        return result;
+      });
+      const stdout = captureStdout();
+      try {
+        const args = ["googlemeet", command, "meet_1"];
+        if (command === "speak") {
+          args.push("hello meeting");
+        }
+        const parsed = setupCli({ callGatewayFromCli, ensureRuntime }).parseAsync(args, {
+          from: "user",
+        });
+        if (error !== undefined) {
+          await expect(parsed).rejects.toEqual(new Error(error));
+        } else {
+          await parsed;
+        }
+        expect(stdout.output()).toBe(output ?? "");
+        expect(calls).toEqual(route === "local" ? ["gateway", "runtime", command] : ["gateway"]);
+        expect(callGatewayFromCli).toHaveBeenCalledWith(
+          `googlemeet.${command}`,
+          { json: true, timeout: "5000" },
+          { sessionId: "meet_1", ...(command === "speak" ? { message: "hello meeting" } : {}) },
+          { progress: false },
+        );
+        expect(leave.mock.calls).toEqual(
+          route === "local" && command === "leave" ? [["meet_1"]] : [],
+        );
+        expect(speak.mock.calls).toEqual(
+          route === "local" && command === "speak" ? [["meet_1", "hello meeting"]] : [],
+        );
+      } finally {
+        stdout.restore();
+      }
+    });
   });
 
   it("prints setup checks as text and JSON", async () => {
@@ -65,10 +199,28 @@ describe("google-meet CLI", () => {
           id: "twilio-voice-call-plugin",
           ok: false,
         });
+        expect(process.exitCode).toBe(1);
       } finally {
         stdout.restore();
       }
     }
+  });
+
+  it("rejects unknown setup mode and transport values", async () => {
+    const setupStatus = vi.fn<NonNullable<GoogleMeetRuntime["setupStatus"]>>();
+    const cli = setupCli({ runtime: { setupStatus } });
+
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--mode", "agnt"], { from: "user" }),
+    ).rejects.toThrow("mode must be agent, bidi, transcribe, or realtime; received agnt");
+    await expect(
+      cli.parseAsync(["googlemeet", "setup", "--transport", "definitely-not-a-transport"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(
+      "transport must be chrome, chrome-node, or twilio; received definitely-not-a-transport",
+    );
+    expect(setupStatus).not.toHaveBeenCalled();
   });
 
   it("accepts --json on session status", async () => {
@@ -445,21 +597,5 @@ describe("google-meet CLI", () => {
         { from: "user" },
       ),
     ).rejects.toThrow("timeout-sec must be a positive number");
-  });
-
-  it("caps auth callback timeout seconds", () => {
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(undefined)).toBe(300_000);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs("1.5")).toBe(1_500);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-  });
-
-  it("caps gateway command timeout milliseconds", () => {
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(undefined)).toBe(5_000);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(1.5)).toBe(2);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 });

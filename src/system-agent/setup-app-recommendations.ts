@@ -1,8 +1,9 @@
+import { extractBalancedJsonPrefix, safeParseJson } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import { z } from "zod";
-import { searchClawHubSkills } from "../infra/clawhub.js";
+import { searchClawHubSkills } from "../infra/clawhub-skills.js";
 import type { InstalledAppsResult } from "../infra/installed-apps.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -285,18 +286,10 @@ async function gatherSetupAppCandidates(params: {
 }
 
 // Models routinely wrap JSON in markdown fences or prose despite "JSON only"
-// instructions; parse the outermost object instead of the raw text.
+// instructions; parse the first complete object instead of the raw text.
 function parseMatcherJson(text: string): unknown {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+  const json = extractBalancedJsonPrefix(text, { openers: ["{"] })?.json;
+  return json ? (safeParseJson(json) ?? null) : null;
 }
 
 function buildMatcherPrompt(groups: SetupAppCandidateGroup[]): string {

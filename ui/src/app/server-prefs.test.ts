@@ -1,8 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
+import { extractServerUiPrefs } from "./server-prefs-state.ts";
+import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
   changedServerUiPrefs,
@@ -26,55 +30,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function configWithPrefs(prefs: Record<string, unknown>) {
-  return { ui: { prefs } };
-}
-
-type RequestMock = ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
-
 function validationError(message = "invalid config") {
   return new GatewayRequestError({ code: "INVALID_REQUEST", message });
-}
-
-function createServerPrefsWriter(
-  request: RequestMock,
-  gatewayUrl = "ws://gw",
-  connected = true,
-  refresh: { ok: true } | { ok: false; error: string } = { ok: true },
-): Parameters<typeof pushServerUiPrefs>[0] {
-  const client = { request, gatewayUrl, connected } as unknown as GatewayBrowserClient;
-  const writer = {
-    state: { client, connected },
-    runExternalMutation: async <T>(task: (client: GatewayBrowserClient) => Promise<T>) => {
-      if (!writer.state.connected) {
-        return {
-          ok: false as const,
-          reason: "unavailable" as const,
-          error: "offline",
-        };
-      }
-      try {
-        return {
-          ok: true as const,
-          value: await task(client),
-          refresh,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          ok: false as const,
-          reason: message.includes("config changed since last load")
-            ? ("conflict" as const)
-            : error instanceof GatewayRequestError &&
-                (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN")
-              ? ("rejected" as const)
-              : ("error" as const),
-          error: message,
-        };
-      }
-    },
-  };
-  return writer;
 }
 
 describe("server pref extraction", () => {
@@ -85,6 +42,7 @@ describe("server pref extraction", () => {
         configWithPrefs({
           theme: "knot",
           themeMode: "dark",
+          accent: "#AbC123",
           locale: "de",
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
@@ -100,11 +58,31 @@ describe("server pref extraction", () => {
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
+      accent: "#abc123",
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
+  });
+
+  it.each([
+    ["#AbC123", "#abc123"],
+    ["#000000", "#000000"],
+    ["#abc", undefined],
+    ["abc123", undefined],
+    ["#abc123ff", undefined],
+    ["#gg0000", undefined],
+  ])("validates and normalizes server and locally mirrored accents %s", (value, expected) => {
+    expect(extractServerUiPrefs(configWithPrefs({ accent: value }))).toEqual(
+      expected ? { accent: expected } : {},
+    );
+    const { gatewayUrl } = loadSettings();
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gatewayUrl}`,
+      JSON.stringify({ gatewayUrl, accent: value }),
+    );
+    expect(loadSettings().accent).toBe(expected);
   });
 
   it("ignores invalid values and configs without prefs", () => {
@@ -157,6 +135,17 @@ describe("server pref extraction", () => {
       resetValue: "claw",
       value: "claw",
     });
+    patchSettings({ theme: "knot" });
+    expect(
+      resolveServerUiPrefState(configWithPrefs({ theme: "custom" }), "theme", "", loadSettings(), {
+        canSync: false,
+      }),
+    ).toEqual({
+      overridden: true,
+      provenance: "device-local",
+      resetValue: "claw",
+      value: "knot",
+    });
 
     const beforeReset = loadSettings();
     const afterReset = resetServerUiPref("theme", state);
@@ -189,7 +178,7 @@ describe("applyServerUiPrefs", () => {
     const client = createServerPrefsWriter(request, scope);
 
     pushServerUiPrefs(client, { themeMode: "dark" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
     );
 
@@ -206,7 +195,7 @@ describe("applyServerUiPrefs", () => {
     const request = vi.fn(async () => ({}));
     const client = createServerPrefsWriter(request, scope);
     pushServerUiPrefs(client, { themeMode: "dark" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
     );
 
@@ -344,18 +333,24 @@ describe("changedServerUiPrefs", () => {
     const previous = loadSettings();
     const withOverrides = {
       ...previous,
+      accent: "#48d6c2",
       chatPersistCommentary: false,
       chatFollowUpMode: "queue" as const,
     };
     expect(changedServerUiPrefs(previous, withOverrides)).toEqual({
+      accent: "#48d6c2",
       chatPersistCommentary: false,
       chatFollowUpMode: "queue",
     });
 
-    // Clearing the follow-up override must propagate as an explicit removal.
+    // Clearing user overrides must propagate as explicit merge-patch removals.
     expect(
-      changedServerUiPrefs(withOverrides, { ...withOverrides, chatFollowUpMode: undefined }),
-    ).toEqual({ chatFollowUpMode: null });
+      changedServerUiPrefs(withOverrides, {
+        ...withOverrides,
+        accent: undefined,
+        chatFollowUpMode: undefined,
+      }),
+    ).toEqual({ accent: null, chatFollowUpMode: null });
   });
 
   it("pushes an explicit locale removal when returning to System", () => {
@@ -432,6 +427,7 @@ describe("clearable pref removal from the server", () => {
       configWithPrefs({
         theme: "knot",
         themeMode: "dark",
+        accent: "#48d6c2",
         chatSendShortcut: "modifier-enter",
       }),
       { onApplied },
@@ -443,24 +439,17 @@ describe("clearable pref removal from the server", () => {
       theme: "claw",
       themeMode: "system",
     });
+    expect(reset.accent).toBeUndefined();
     expect(reset.chatSendShortcut).toBe("enter");
     const persisted = JSON.parse(
       localStorage.getItem(`openclaw.control.settings.v1:${reset.gatewayUrl}`) ?? "{}",
     ) as Record<string, unknown>;
+    expect(Object.hasOwn(persisted, "accent")).toBe(false);
     expect(Object.hasOwn(persisted, "chatSendShortcut")).toBe(false);
   });
 });
 
 describe("pushServerUiPrefs", () => {
-  const deferred = () => {
-    let resolve!: (value: unknown) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    return { promise, reject, resolve };
-  };
   const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
   const lastSeenKey = (scope: string) => `openclaw.control.serverPrefs.v1:${scope}`;
   const readPending = (scope: string) =>
@@ -469,7 +458,7 @@ describe("pushServerUiPrefs", () => {
 
   it("does not publish a server theme change shadowed by pending local intent", async () => {
     const scope = "ws://gw";
-    const requestGate = deferred();
+    const requestGate = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => requestGate.promise,
     );
@@ -495,7 +484,7 @@ describe("pushServerUiPrefs", () => {
     expect(onThemeChanged).not.toHaveBeenCalled();
 
     requestGate.resolve({});
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
   });
 
   it("keeps a synced default reset as a pending offline null intent", () => {
@@ -541,6 +530,7 @@ describe("pushServerUiPrefs", () => {
 
   it("retains rejected appearance edits as device-local state with local-only reset", async () => {
     const scope = "ws://gw";
+    patchSettings({ gatewayUrl: scope });
     const config = configWithPrefs({
       theme: "claw",
       locale: "de",
@@ -561,7 +551,7 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: false,
         retainedLocal: true,
@@ -617,7 +607,7 @@ describe("pushServerUiPrefs", () => {
     });
 
     pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: false,
         retainedLocal: true,
@@ -652,7 +642,7 @@ describe("pushServerUiPrefs", () => {
     const client = createClient(request);
 
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
-    await vi.waitFor(() => expect(afterCommit).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
     expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: false });
 
     expect(request).toHaveBeenCalledExactlyOnceWith("config.patch", {
@@ -668,7 +658,7 @@ describe("pushServerUiPrefs", () => {
 
   it("merges this tab's edit with sibling persisted pending keys", () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -683,7 +673,7 @@ describe("pushServerUiPrefs", () => {
 
   it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -695,7 +685,7 @@ describe("pushServerUiPrefs", () => {
 
     flight.resolve({});
 
-    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
 
   it("drops only this tab's validation-rejected keys from persisted pending", async () => {
@@ -709,12 +699,12 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(client, { theme: "knot" });
 
-    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
 
   it("overwrites only a same-key sibling value when this tab persists later", () => {
     const scope = "ws://gw";
-    const flight = deferred();
+    const flight = createDeferred<unknown>();
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
       () => flight.promise,
     );
@@ -746,7 +736,7 @@ describe("pushServerUiPrefs", () => {
     pushServerUiPrefs(client, { themeMode: "light" });
     resolveFirst?.();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toEqual({
       raw: JSON.stringify({ ui: { prefs: { themeMode: "light" } } }),
       note: "control-ui prefs sync",
@@ -769,7 +759,34 @@ describe("pushServerUiPrefs", () => {
     request.mockResolvedValue({});
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+  });
+
+  it("retains in-memory pending intent when localStorage is unavailable", async () => {
+    const storageError = new Error("storage unavailable");
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw storageError;
+      },
+      removeItem: () => {
+        throw storageError;
+      },
+      setItem: () => {
+        throw storageError;
+      },
+    });
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => ({}));
+    const client = createClient(request, "ws://gw", false);
+
+    pushServerUiPrefs(client, { locale: "de" });
+    (client.state as { connected: boolean }).connected = true;
+    flushServerUiPrefs(client);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("config.patch", {
+      raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
+      note: "control-ui prefs sync",
+    });
   });
 
   it("retains a connected transient failure and retries it on flush", async () => {
@@ -785,7 +802,7 @@ describe("pushServerUiPrefs", () => {
 
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("supersedes a hung prior-connection request on same-client flush", async () => {
@@ -801,12 +818,12 @@ describe("pushServerUiPrefs", () => {
     flushServerUiPrefs(client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {
-    const first = deferred();
-    const second = deferred();
+    const first = createDeferred<unknown>();
+    const second = createDeferred<unknown>();
     let calls = 0;
     const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(() => {
       calls += 1;
@@ -823,7 +840,7 @@ describe("pushServerUiPrefs", () => {
 
     expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
     second.resolve({});
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("reconciles the refreshed snapshot again after clearing its pending shadow", async () => {
@@ -850,7 +867,7 @@ describe("pushServerUiPrefs", () => {
       },
     );
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
 
     expect(onApplied).toHaveBeenCalledWith({ themeMode: "light" });
     expect(loadSettings().themeMode).toBe("light");
@@ -866,7 +883,7 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: true,
       }),
@@ -916,7 +933,7 @@ describe("pushServerUiPrefs", () => {
     });
     resolveRequest?.();
 
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://a"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://a"))).toBeNull());
     expect(JSON.parse(localStorage.getItem(pendingKey("ws://b")) ?? "{}")).toEqual({
       locale: "de",
     });
@@ -1082,7 +1099,7 @@ describe("pushServerUiPrefs", () => {
       firstClient;
     (writer.state as { connected: boolean }).connected = true;
     flushServerUiPrefs(writer);
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
     expect(localStorage.getItem(pendingKey(""))).toBeNull();
 
     localStorage.setItem(pendingKey("ws://second"), JSON.stringify({ themeMode: "dark" }));
@@ -1110,7 +1127,7 @@ describe("pushServerUiPrefs", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({
       raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
     });
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
     expect(localStorage.getItem(pendingKey(""))).toBeNull();
   });
 });

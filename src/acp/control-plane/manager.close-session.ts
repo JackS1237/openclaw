@@ -3,8 +3,10 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { toAcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import {
   discardPersistedManagerRuntimeState,
   isRecoverableManagerAcpxExitError,
@@ -24,6 +26,7 @@ import { requireReadySessionMeta, resolveAcpSessionResolutionError } from "./man
 export async function runManagerCloseSession(params: {
   input: AcpCloseSessionInput;
   sessionKey: string;
+  agentId: string;
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
   resolveSession: ResolveManagerSession;
@@ -31,10 +34,14 @@ export async function runManagerCloseSession(params: {
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor: () => boolean;
 }): Promise<AcpCloseSessionResult> {
-  const { input, sessionKey } = params;
+  const { input, sessionKey, agentId } = params;
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(sessionKey);
+  }
   const resolution = params.resolveSession({
     cfg: input.cfg,
     sessionKey,
+    agentId,
   });
   const resolutionError = resolveAcpSessionResolutionError(resolution);
   if (resolutionError) {
@@ -61,48 +68,35 @@ export async function runManagerCloseSession(params: {
       cfg: input.cfg,
       meta,
       sessionKey,
+      agentId,
       logPrefix: "acp close fast-reset",
     });
     if (!params.isCurrentActor()) {
-      return {
-        runtimeClosed: false,
-        metaCleared: false,
-      };
+      throw createSupersededActorError(sessionKey);
     }
-    params.runtimeHandles.clear(sessionKey);
+    params.runtimeHandles.clear(params);
   } else {
     try {
       const { runtime: ensuredRuntime, handle } = await params.ensureRuntimeHandle({
         cfg: input.cfg,
         sessionKey,
+        agentId,
         meta,
         isCurrentActor: params.isCurrentActor,
       });
-      if (input.discardPersistentState) {
-        // A discard close may itself hang. Evict before awaiting it so reset
-        // callers can never reuse the handle after their cleanup timeout.
-        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
+      if (!params.isCurrentActor()) {
+        throw createSupersededActorError(sessionKey);
       }
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await ensuredRuntime.close({
-            handle,
-            reason: input.reason,
-            discardPersistentState: input.discardPersistentState,
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "ACP close failed before completion.",
+      await ensuredRuntime.close({
+        handle,
+        reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
       });
       runtimeClosed = true;
       if (!params.isCurrentActor()) {
-        return {
-          runtimeClosed,
-          metaCleared: false,
-        };
+        throw createSupersededActorError(sessionKey);
       }
-      if (!input.discardPersistentState) {
-        params.runtimeHandles.clearIfHandleMatches({ sessionKey, handle });
-      }
+      params.runtimeHandles.clear(params);
     } catch (error) {
       const acpError = toAcpRuntimeError({
         error,
@@ -113,6 +107,7 @@ export async function runManagerCloseSession(params: {
         throw acpError;
       }
       if (
+        !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
         (acpError.code === "ACP_BACKEND_MISSING" ||
           acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
@@ -126,6 +121,7 @@ export async function runManagerCloseSession(params: {
             cfg: input.cfg,
             meta,
             sessionKey,
+            agentId,
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
           });
@@ -133,9 +129,12 @@ export async function runManagerCloseSession(params: {
             throw acpError;
           }
         }
-        // Treat unavailable backends as terminal for this cached handle so it
-        // cannot continue counting against maxConcurrentSessions.
-        params.runtimeHandles.clear(sessionKey);
+        // Treat unavailable backends as terminal for this cached handle so a
+        // later operation cannot reuse an unusable runtime.
+        if (!params.isCurrentActor()) {
+          throw createSupersededActorError(sessionKey);
+        }
+        params.runtimeHandles.clear(params);
         runtimeNotice = acpError.message;
       } else {
         throw acpError;
@@ -143,48 +142,29 @@ export async function runManagerCloseSession(params: {
     }
   }
 
-  if (!params.isCurrentActor()) {
-    return {
-      runtimeClosed,
-      ...(runtimeNotice ? { runtimeNotice } : {}),
-      metaCleared: false,
-    };
-  }
-
-  let metaCleared = false;
   if (input.discardPersistentState && !input.clearMeta) {
     await discardPersistedManagerRuntimeState({
       cfg: input.cfg,
       sessionKey,
+      agentId,
       writeSessionMeta: params.writeSessionMeta,
       isCurrentActor: params.isCurrentActor,
     });
   }
 
-  if (input.clearMeta) {
+  if (!params.isCurrentActor()) {
+    throw createSupersededActorError(sessionKey);
+  }
+  const metaCleared = Boolean(input.clearMeta);
+  if (metaCleared) {
     await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
+      agentId,
       isCurrentActor: params.isCurrentActor,
-      mutate: (_current, entry) => {
-        if (!params.isCurrentActor()) {
-          return undefined;
-        }
-        if (!entry) {
-          return null;
-        }
-        return null;
-      },
+      mutate: () => null,
       failOnError: true,
     });
-    if (!params.isCurrentActor()) {
-      return {
-        runtimeClosed,
-        ...(runtimeNotice ? { runtimeNotice } : {}),
-        metaCleared: false,
-      };
-    }
-    metaCleared = true;
   }
 
   return {

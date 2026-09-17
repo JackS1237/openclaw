@@ -7,10 +7,7 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  hasConfiguredSecretInput,
-  isProviderApiKeyConfigured,
-} from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -24,31 +21,15 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
+import {
+  createGoogleImageGenerationProviderMetadata,
+  DEFAULT_GOOGLE_IMAGE_MODEL,
+  GOOGLE_MAX_IMAGE_RESULTS,
+} from "./generation-provider-metadata.js";
 
-const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
-const GOOGLE_MAX_IMAGE_RESULTS = 4;
-const GOOGLE_SUPPORTED_SIZES = [
-  "1024x1024",
-  "1024x1536",
-  "1536x1024",
-  "1024x1792",
-  "1792x1024",
-] as const;
-const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-] as const;
-
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
 
 function normalizeGoogleImageModel(model: string | undefined): string {
@@ -144,41 +125,11 @@ function googleInlineDataFromPart(part: unknown): Record<string, unknown> | unde
 }
 
 export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
+  const { capabilities, ...metadata } = createGoogleImageGenerationProviderMetadata();
   return {
-    id: "google",
-    label: "Google",
-    defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
-    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
-    isConfigured: ({ cfg, agentDir }) =>
-      // generateImage already authenticates from a config apiKey; count a
-      // usable one (non-blank literal or secret ref) as configured here too,
-      // so image gen works from config alone, like chat.
-      hasConfiguredSecretInput(cfg?.models?.providers?.google?.apiKey) ||
-      isProviderApiKeyConfigured({
-        provider: "google",
-        agentDir,
-      }),
-    capabilities: {
-      generate: {
-        maxCount: GOOGLE_MAX_IMAGE_RESULTS,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      edit: {
-        enabled: true,
-        maxCount: GOOGLE_MAX_IMAGE_RESULTS,
-        maxInputImages: 5,
-        supportsSize: true,
-        supportsAspectRatio: true,
-        supportsResolution: true,
-      },
-      geometry: {
-        sizes: [...GOOGLE_SUPPORTED_SIZES],
-        aspectRatios: [...GOOGLE_SUPPORTED_ASPECT_RATIOS],
-        resolutions: ["1K", "2K", "4K"],
-      },
-    },
+    ...metadata,
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
+    capabilities,
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "google",
@@ -259,8 +210,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!data) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
+          const standardData = toStandardGoogleProviderBase64(data);
+          if (!standardData) {
+            throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
+          }
           const image = generatedImageAssetFromBase64({
-            base64: data,
+            base64: standardData,
             index: imageIndex,
             mimeType:
               normalizeOptionalString(inline.mimeType) ??

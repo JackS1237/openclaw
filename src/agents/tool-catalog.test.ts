@@ -30,9 +30,20 @@ describe("tool-catalog", () => {
     expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
-  it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {
+  it("lists GitHub publication only with a prepared session capability", () => {
+    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
+      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
+
+    expect(ids()).not.toContain("github_publish");
+    expect(ids()).not.toContain("github_identity_status");
+    expect(ids({ githubPublicationAvailable: false })).toContain("github_identity_status");
+    expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
+  });
+
+  it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
+      "ls",
       "read",
       "write",
       "edit",
@@ -40,6 +51,7 @@ describe("tool-catalog", () => {
       "exec",
       "process",
       "code_execution",
+      "secrets",
       "web_search",
       "web_fetch",
       "x_search",
@@ -54,23 +66,28 @@ describe("tool-catalog", () => {
       "conversations_turn",
       "sessions_send",
       "sessions_spawn",
+      "github_identity_status",
+      "github_publish",
       "agents_wait",
       "sessions_yield",
       "subagents",
       "session_status",
-      "spawn_task",
+      "suggest_task",
       "dismiss_task",
       "screen",
       "dashboard",
       "terminal",
+      "portal",
       "automations",
+      "gateway",
+      "plugins",
       "get_goal",
       "create_goal",
       "update_goal",
-      "update_plan",
+      "progress_card",
       "ask_user",
       "skill_workshop",
-      "image",
+      "view_image",
       "image_generate",
       "music_generate",
       "video_generate",
@@ -81,6 +98,7 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "secrets",
       "sessions",
       "sessions_list",
       "sessions_history",
@@ -94,10 +112,19 @@ describe("tool-catalog", () => {
       "subagents",
       "session_status",
       "message",
+      "gateway",
       "ask_user",
       "bundle-mcp",
     ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
+    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "gateway"]);
+  });
+
+  it("treats pdf as a known media core tool, not a plugin id", () => {
+    const mediaIds = listCoreToolSections()
+      .find((section) => section.id === "media")
+      ?.tools.map((tool) => tool.id);
+    expect(mediaIds).toContain("pdf");
+    expect(mediaIds).toContain("tts");
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {

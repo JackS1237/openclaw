@@ -20,6 +20,15 @@ separate Fish Audio license. Hosted API use follows Fish Audio's service terms.
 
 ## Hosted S2.1
 
+Install the `fish-audio-speech` plugin:
+
+```bash
+openclaw plugins install @openclaw/fish-audio-speech
+```
+
+The plugin id is `fish-audio-speech`. The provider and TTS configuration id
+remain `fish-audio`.
+
 Set an API key from the [Fish Audio API Keys](https://fish.audio/app/api-keys) page:
 
 ```bash
@@ -52,12 +61,12 @@ plugins, but `FISH_API_KEY` is the canonical Fish SDK environment variable.
 
 ### Hosted models
 
-| Model           | Use                                                                                                            |
-| --------------- | -------------------------------------------------------------------------------------------------------------- |
-| `s2.1-pro`      | Default. Production S2.1 service with the hosted service guarantees attached to your plan.                     |
-| `s2.1-pro-free` | Promotional S2.1 access through August 31, 2026; no TTFA or DPA guarantees. Select it explicitly while active. |
-| `s2-pro`        | Previous S2 generation.                                                                                        |
-| `s1`            | Previous generation with parenthesized emotion controls.                                                       |
+| Model           | Use                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| `s2.1-pro`      | Default. Production S2.1 service with the hosted service guarantees attached to your plan. |
+| `s2.1-pro-free` | Promotional S2.1 access that ended on August 31, 2026; no TTFA or DPA guarantees.          |
+| `s2-pro`        | Previous S2 generation.                                                                    |
+| `s1`            | Previous generation with parenthesized emotion controls.                                   |
 
 The provider requests MP3 for ordinary audio, Opus at 48 kHz for native voice
 notes, and raw PCM at 8 kHz for telephony. For Discord voice, OpenClaw consumes

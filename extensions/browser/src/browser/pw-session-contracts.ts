@@ -1,4 +1,12 @@
-import type { Browser, BrowserContext, Dialog, Frame, Page, Request } from "playwright-core";
+import type {
+  Browser,
+  BrowserContext,
+  CDPSession,
+  Dialog,
+  Frame,
+  Page,
+  Request,
+} from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { PlaywrightDownload } from "./pw-download-capture.js";
 
@@ -101,7 +109,8 @@ export type ActionDownloadCapture = {
 export type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
-  requests: BrowserNetworkRequest[];
+  requests: Map<string, BrowserNetworkRequest>;
+  // Strong Request keys would retain disposed Playwright page/context graphs.
   requestIds: WeakMap<Request, string>;
   nextRequestId: number;
   armIdUpload: number;
@@ -113,6 +122,14 @@ export type PageState = {
   recentDialogs: BrowserObservedDialogRecord[];
   armedDialogResponse?: ArmedDialogResponse;
   dialogAbortControllers: Set<AbortController>;
+  /** Persistent session and queue for page-scoped emulation overrides. */
+  emulation?: {
+    session?: Promise<CDPSession>;
+    transitionTail?: Promise<void>;
+    transitionAbort?: AbortController;
+    metricsOwner?: { session: CDPSession; viewport: { width: number; height: number } };
+    touch?: { session: CDPSession; enabled: boolean };
+  };
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
@@ -146,7 +163,6 @@ export type ContextState = {
 export const pageStates = new WeakMap<Page, PageState>();
 export const contextStates = new WeakMap<BrowserContext, ContextState>();
 export const observedContexts = new WeakSet<BrowserContext>();
-export const observedPages = new WeakSet<Page>();
 
 export const MAX_CONSOLE_MESSAGES = 500;
 export const MAX_PAGE_ERRORS = 200;
@@ -170,7 +186,6 @@ export const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 export const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
 export const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
 export const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
-export const closedConnections = new WeakSet<ConnectedBrowser>();
 export const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 export const blockedTargetsByCdpUrl = new Set<string>();
 export const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();

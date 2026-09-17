@@ -1,24 +1,19 @@
 // Signal helper module supports config schema behavior.
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelDeliveryStreamingConfigSchema,
   ChannelSendReadReceiptsSchema,
   ExecutableTokenSchema,
   ReplyToModeSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+import { resolveSignalAccountEntry } from "./account-selection.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SIGNAL_RETIRED_TRANSPORT_KEYS = [
@@ -114,14 +109,15 @@ const SignalGroupEntrySchema = buildGroupEntrySchema(
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["mentionPatterns"],
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+});
+
 const SignalAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      omit: ["mentionPatterns"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-      mediaMaxMb: z.number().int().positive().optional(),
-    }),
+    ...accountShape,
     account: z.string().optional(),
     accountUuid: z.string().optional(),
     transport: SignalTransportSchema.optional(),
@@ -145,6 +141,7 @@ const SignalAccountSchemaBase = z
   .strict();
 
 const SignalConfigSchemaBase = SignalAccountSchemaBase.extend({
+  ...rootPolicyShape,
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime.
   accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),
@@ -153,49 +150,18 @@ const SignalConfigSchemaBase = SignalAccountSchemaBase.extend({
 type SignalConfigValidationValue = z.infer<typeof SignalConfigSchemaBase>;
 
 function validateSignalConfigAllowFrom(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "signal", value, ctx });
 
   for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
     if (!account) {
       continue;
     }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="open" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "signal", value, accountId, ctx });
   }
 }
 
 function validateSignalContainerAccounts(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
-  const defaultAccount = resolveAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
+  const defaultAccount = resolveSignalAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
   const effectiveDefaultAccount =
     defaultAccount?.account === undefined ? value.account : defaultAccount.account;
   const channelEnabled = value.enabled !== false;

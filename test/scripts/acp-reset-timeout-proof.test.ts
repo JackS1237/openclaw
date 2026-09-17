@@ -4,6 +4,7 @@ import {
   identityFromTurn,
   parseAdapterEvents,
   readAcpSessionIdFromRow,
+  readAcpRuntimeOptionsFromRow,
   resolveResetCommand,
   sameAcpSession,
 } from "../../scripts/acp-reset-timeout-proof.js";
@@ -49,6 +50,17 @@ describe("ACP reset timeout proof helpers", () => {
       }),
     ).toBe("session-fresh");
     expect(readAcpSessionIdFromRow({ identity_json: "not-json" })).toBe("");
+  });
+
+  it("requires valid runtime-option evidence and distinguishes stale mode writes", () => {
+    expect(readAcpRuntimeOptionsFromRow({ runtime_options_json: null })).toEqual({});
+    expect(
+      readAcpRuntimeOptionsFromRow({ runtime_options_json: '{"runtimeMode":"plan"}' }),
+    ).toEqual({ runtimeMode: "plan" });
+    expect(() => readAcpRuntimeOptionsFromRow(undefined)).toThrow("metadata row is missing");
+    expect(() => readAcpRuntimeOptionsFromRow({ runtime_options_json: "[]" })).toThrow(
+      "must be an object",
+    );
   });
 
   it("extracts the dynamically spawned ACP session key from command history", () => {

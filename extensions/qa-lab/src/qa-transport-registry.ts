@@ -1,6 +1,7 @@
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab plugin module implements qa transport registry behavior.
 import type { QaBusState } from "./bus-state.js";
+import { createQaCrablineTransportAdapterFactory } from "./crabline-transport-factory.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -9,8 +10,15 @@ import {
   createQaChannelTransport,
   QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
 } from "./qa-channel-transport.js";
+import type {
+  QaTransportAdapterFactory,
+  QaTransportFactoryMatchContext,
+} from "./qa-transport-factory.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaStateBackedTransportAdapter } from "./qa-transport.js";
+import type { QaScenarioExecutionCell } from "./scenario-lane.js";
+
+export type { QaTransportAdapterFactory } from "./qa-transport-factory.js";
 
 export type QaTransportId = "qa-channel";
 export type QaTransportDriver = QaTransportId | "crabline" | "live";
@@ -34,7 +42,48 @@ export type QaTransportAdapterFactoryResult<
   cleanupWithoutGateway: () => Promise<void>;
 };
 
-export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
+const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
+
+function listBuiltInQaTransportFactories(state: QaBusState) {
+  return [createQaCrablineTransportAdapterFactory(state)] as const;
+}
+
+export async function prepareQaTransportAdapterFactories(params: {
+  factories: readonly QaTransportAdapterFactory[] | undefined;
+  driver: QaTransportDriver | undefined;
+  cells: readonly QaScenarioExecutionCell[];
+}): Promise<readonly QaTransportAdapterFactory[] | undefined> {
+  const { factories, driver, cells } = params;
+  if (!factories || driver !== "live") {
+    return factories;
+  }
+  return await Promise.all(
+    factories.map(async (factory) => {
+      if (!factory.prepareSelectedScenarios) {
+        return factory;
+      }
+      const scenarioIds = [
+        ...new Set(
+          cells.flatMap(({ channel, scenarioId }) =>
+            channel &&
+            factories.find((candidate) => candidate.matches({ channelId: channel, driver })) ===
+              factory
+              ? [scenarioId]
+              : [],
+          ),
+        ),
+      ];
+      if (scenarioIds.length === 0) {
+        return factory;
+      }
+      await factory.prepareSelectedScenarios(scenarioIds);
+      // Child partitions carry ready factories, so cold preparation cannot reenter their timers.
+      const ready = Object.assign({}, factory);
+      delete ready.prepareSelectedScenarios;
+      return ready;
+    }),
+  );
+}
 
 type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
@@ -48,17 +97,6 @@ async function createBuiltInQaTransport(
   if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
     return createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
   }
-  if (context.driver === "crabline") {
-    const { resolveOpenClawCrablineChannelDriverSelection } = await import("@openclaw/crabline");
-    const selection = resolveOpenClawCrablineChannelDriverSelection({ channel: context.channelId });
-    const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
-    return await createQaCrablineTransportAdapter({
-      outputDir: context.outputDir,
-      transportPolicy: context.adapterOptions?.transportPolicy,
-      selection,
-      state: context.state,
-    });
-  }
   return undefined;
 }
 
@@ -71,6 +109,23 @@ function requireQaTransportFactory(
     throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
   }
   return factory;
+}
+
+export function qaTransportSupportsModuleFlows(
+  factories: readonly QaTransportAdapterFactory[] | undefined,
+  context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
+): boolean {
+  const factory = [...(factories ?? []), QA_CRABLINE_TRANSPORT_FACTORY_METADATA].find((candidate) =>
+    candidate.matches(context),
+  );
+  return resolveQaTransportFactoryModuleFlowSupport(factory, context);
+}
+
+function resolveQaTransportFactoryModuleFlowSupport(
+  factory: QaTransportAdapterFactory | undefined,
+  context: QaTransportFactoryMatchContext,
+) {
+  return factory?.supportsModuleFlowsFor?.(context) ?? factory?.supportsModuleFlows === true;
 }
 
 function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () => Promise<void> {
@@ -91,6 +146,20 @@ function createQaTransportCleanup(cleanup: () => Promise<void> | undefined): () 
   };
 }
 
+async function collectQaTransportCleanupErrors(
+  cleanups: readonly (() => Promise<void> | undefined)[],
+): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
 function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
@@ -102,7 +171,10 @@ function createQaTransportAdapterFactoryRegistry(
         if (builtIn) {
           adapter = builtIn;
         } else {
-          const factory = requireQaTransportFactory(factories, context);
+          const factory = requireQaTransportFactory(
+            [...factories, ...listBuiltInQaTransportFactories(context.state)],
+            context,
+          );
           const definition = await factory.create({
             adapterOptions: context.adapterOptions,
             channelId: context.channelId,
@@ -118,6 +190,22 @@ function createQaTransportAdapterFactoryRegistry(
             },
             outputDir: context.outputDir,
           });
+          if (
+            resolveQaTransportFactoryModuleFlowSupport(factory, context) &&
+            typeof definition.prepareFlow !== "function"
+          ) {
+            const mismatch = new Error(
+              `QA transport factory "${factory.id}" supports module flows but its adapter does not implement prepareFlow`,
+            );
+            const cleanupErrors = await collectQaTransportCleanupErrors([
+              () => definition.cleanup?.(),
+              () => definition.cleanupAfterGatewayStop?.(),
+            ]);
+            if (cleanupErrors.length > 0) {
+              throw new AggregateError([mismatch, ...cleanupErrors], mismatch.message);
+            }
+            throw mismatch;
+          }
           adapter = createQaStateBackedTransportAdapter(context.state, definition);
         }
       } catch (error) {
@@ -134,14 +222,10 @@ function createQaTransportAdapterFactoryRegistry(
         adapter.cleanupAfterGatewayStop?.(),
       );
       const cleanupWithoutGateway = async () => {
-        const errors: unknown[] = [];
-        for (const cleanup of [cleanupBeforeGatewayStop, cleanupAfterGatewayStop]) {
-          try {
-            await cleanup();
-          } catch (error) {
-            errors.push(error);
-          }
-        }
+        const errors = await collectQaTransportCleanupErrors([
+          cleanupBeforeGatewayStop,
+          cleanupAfterGatewayStop,
+        ]);
         if (errors.length === 1) {
           throw errors[0];
         }
@@ -167,6 +251,20 @@ export function normalizeQaTransportId(input?: string | null): QaTransportId {
     return transportId;
   }
   throw new Error(`unsupported QA transport: ${transportId}`);
+}
+
+export function selectQaTransportDriver(params: {
+  channelDriver?: QaTransportDriver | null;
+  channelId?: string;
+  transportId: QaTransportId;
+}): QaTransportDriver {
+  if (params.channelDriver === "crabline" && !params.channelId) {
+    throw new Error("channelDriver=crabline requires a channel");
+  }
+  if (params.channelDriver === "live") {
+    return params.channelId ? "live" : params.transportId;
+  }
+  return params.channelDriver ?? params.transportId;
 }
 
 export async function createQaTransportAdapter(

@@ -9,7 +9,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import type { ChatEvent, EventFrame } from "../packages/gateway-protocol/src/index.js";
+import { buildAcpDatabaseSessionKey } from "../src/acp/runtime/session-meta-keys.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { connectTestGatewayClient } from "../src/gateway/gateway-cli-backend.live-helpers.js";
 import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
@@ -181,13 +183,32 @@ function readAcpMetadataRow(
     try {
       return database
         .prepare("SELECT * FROM acp_sessions WHERE session_key = ?")
-        .get(sessionKey) as Record<string, unknown> | undefined;
+        .get(buildAcpDatabaseSessionKey(sessionKey, PROOF_ACP_AGENT)) as
+        | Record<string, unknown>
+        | undefined;
     } finally {
       database.close();
     }
   } catch {
     return undefined;
   }
+}
+
+export function readAcpRuntimeOptionsFromRow(
+  row: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  assert(row !== undefined, "ACP metadata row is missing while checking runtime options");
+  const raw = row.runtime_options_json;
+  if (raw === null || raw === undefined || raw === "") {
+    return {};
+  }
+  assert(typeof raw === "string", "ACP runtime options must be serialized JSON");
+  const options: unknown = JSON.parse(raw);
+  assert(
+    typeof options === "object" && options !== null && !Array.isArray(options),
+    "ACP runtime options must be an object",
+  );
+  return options as Record<string, unknown>;
 }
 
 function readAgentSessionRows(stateDir: string, sessionKey: string): Record<string, unknown> {
@@ -803,6 +824,10 @@ async function runScenario(params: {
       "reset reused the old ACP session ID",
     );
     const rowAfterFresh = readAcpMetadataRow(state.stateDir, acpSessionKey);
+    const freshRuntimeOptions = readAcpRuntimeOptionsFromRow(rowAfterFresh);
+    if (params.scenario === "runtime-option-timeout") {
+      assert(fresh.event.mode === "default", "fresh backend inherited the pending old mode");
+    }
     assert(
       readAcpSessionIdFromRow(rowAfterFresh) === freshIdentity.sessionId,
       `fresh metadata does not own the new ACP session: ${JSON.stringify(rowAfterFresh)}`,
@@ -919,6 +944,16 @@ async function runScenario(params: {
       `late completion replaced fresh ACP metadata: ${JSON.stringify(rowAfterLateCompletion)}`,
     );
 
+    if (params.scenario === "runtime-option-timeout") {
+      assert(
+        isDeepStrictEqual(
+          readAcpRuntimeOptionsFromRow(rowAfterLateCompletion),
+          freshRuntimeOptions,
+        ),
+        "late runtime-option completion changed the fresh runtime options",
+      );
+    }
+
     const followup = await sendAndObserveTurn({
       client,
       controlDir,
@@ -939,10 +974,23 @@ async function runScenario(params: {
       readAcpSessionIdFromRow(rowAfterFollowup) === freshIdentity.sessionId,
       `follow-up metadata no longer owns the fresh ACP session: ${JSON.stringify(rowAfterFollowup)}`,
     );
+    if (params.scenario === "runtime-option-timeout") {
+      assert(
+        isDeepStrictEqual(readAcpRuntimeOptionsFromRow(rowAfterFollowup), freshRuntimeOptions),
+        "follow-up changed the fresh runtime options after the stale operation",
+      );
+      assert(
+        followup.event.mode === "default",
+        "follow-up replayed the stale mode into the fresh backend",
+      );
+    }
     await logDriverEvent(scenarioDir, "runtime_state_after_late_completion", {
       sessionKey: acpSessionKey,
       rowAfterLateCompletion,
       rowAfterFollowup,
+      freshRuntimeOptions,
+      freshBackendMode: fresh.event.mode,
+      followupBackendMode: followup.event.mode,
       followupIdentity,
       gatewayPid: gatewayPidAfterLateCompletion,
     });
@@ -993,6 +1041,8 @@ async function runScenario(params: {
           ? [
               "the old runtime-option operation started before reset and completed after the fresh turn",
               "the superseded runtime-option operation did not replace fresh metadata or ownership",
+              "fresh runtime options remained unchanged after late completion and follow-up",
+              "the fresh backend and follow-up remained in default mode instead of the stale plan mode",
             ]
           : []),
       ],

@@ -1,7 +1,7 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaSuiteChannelDriverSelection } from "./crabline-artifacts.js";
 import type { QaProviderMode } from "./model-selection.js";
-import { parseQaProgressBooleanEnv as parseQaSuiteBooleanEnv } from "./progress-format.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
@@ -41,7 +41,7 @@ export async function runQaScenarioWithFlakeRetry(
 
 export function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  channelDriverSelection?: QaSuiteChannelDriverSelection | null;
+  crablineArtifacts?: QaSuiteChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -52,9 +52,8 @@ export function createQaSuiteReportNotes(params: {
 }) {
   return [
     ...params.transport.createReportNotes(params),
-    // Crabline reports completed generation paths through this filename-narrowed selection.
     ...(params.createCrablineChannelReportNotes?.(
-      params.channelDriverSelection as OpenClawCrablineChannelDriverSelection | null | undefined,
+      params.crablineArtifacts as OpenClawCrablineChannelDriverSelection | null | undefined,
     ) ?? []),
   ];
 }
@@ -65,7 +64,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   providerMode: QaProviderMode;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelId?: string;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -76,14 +75,15 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   return {
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
-    channelId: params.input?.channelId,
+    channelId: params.channelId ?? params.input?.channelId,
+    evidenceMode: params.input?.evidenceMode,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
+    mutateConfig: params.input?.mutateConfig,
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
     channelDriver: params.channelDriver,
-    channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
@@ -93,7 +93,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     enabledPluginIds: params.input?.enabledPluginIds,
     concurrency: 1,
     startLab: params.startLab,
-    controlUiEnabled: scenarioRequiresControlUi(params.scenario),
+    controlUiEnabled: params.input?.controlUiEnabled ?? scenarioRequiresControlUi(params.scenario),
     transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
     workerStartStaggerMs: params.input?.workerStartStaggerMs,
     forcedRuntime: params.input?.forcedRuntime,
@@ -120,13 +120,13 @@ export function remapModelRefForForcedRuntime(params: {
   return `openai/${split.model}`;
 }
 
-export function appendNodeOption(raw: string | undefined, option: string) {
+function appendNodeOption(raw: string | undefined, option: string) {
   const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
   return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
 }
 
 export function shouldCaptureGatewayHeapCheckpoints(env: NodeJS.ProcessEnv = process.env) {
-  return parseQaSuiteBooleanEnv(env.OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS) === true;
+  return parseBooleanValue(env.OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS) === true;
 }
 
 export function buildQaGatewayHeapCheckpointRuntimeEnvPatch(

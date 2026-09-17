@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
@@ -7,12 +8,14 @@ import {
   type MatrixClient as MatrixJsClient,
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import type { SsrFPolicy } from "../../runtime-api.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "../client/logging.js";
+import type { MatrixSnapshotStateRuntime } from "../crypto-state-store.js";
 import { createMatrixStartupAbortError, throwIfMatrixStartupAborted } from "../startup-abort.js";
 import {
   isMatrixReadySyncState,
@@ -27,60 +30,20 @@ import {
   type MatrixOwnDeviceInfo,
   type MatrixOwnDeviceVerificationStatus,
 } from "./client-support.js";
+import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
 import { LogService, noop } from "./logger.js";
+import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
-
-export type MatrixMessageWireDispatch = {
-  roomId: string;
-  eventType: "m.room.message" | "m.room.encrypted";
-  transactionId: string;
-  requestPath: string;
-};
-
-type MatrixMessageWireDispatchGuard = (dispatch: MatrixMessageWireDispatch) => Promise<void>;
-
-function resolveMessageWireDispatch(
-  resource: RequestInfo | URL,
-  init?: RequestInit,
-): MatrixMessageWireDispatch | null {
-  const method = (
-    init?.method ?? (resource instanceof Request ? resource.method : "GET")
-  ).toUpperCase();
-  if (method !== "PUT") {
-    return null;
-  }
-  const rawUrl =
-    typeof resource === "string"
-      ? resource
-      : resource instanceof URL
-        ? resource.href
-        : resource.url;
-  const segments = new URL(rawUrl).pathname.split("/").filter(Boolean);
-  const roomsIndex = segments.lastIndexOf("rooms");
-  if (roomsIndex < 0 || segments[roomsIndex + 2] !== "send" || segments.length !== roomsIndex + 5) {
-    return null;
-  }
-  const eventType = decodeURIComponent(segments[roomsIndex + 3] ?? "");
-  if (eventType !== "m.room.message" && eventType !== "m.room.encrypted") {
-    return null;
-  }
-  return {
-    roomId: decodeURIComponent(segments[roomsIndex + 1] ?? ""),
-    eventType,
-    transactionId: decodeURIComponent(segments[roomsIndex + 4] ?? ""),
-    requestPath: new URL(rawUrl).pathname,
-  };
-}
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
 
@@ -121,6 +84,7 @@ export abstract class MatrixClientBase {
   protected readonly syncStore?: SqliteBackedMatrixSyncStore;
   protected readonly idbSnapshotPath?: string;
   protected readonly cryptoDatabasePrefix?: string;
+  protected readonly stateRuntime?: MatrixSnapshotStateRuntime;
   protected bridgeRegistered = false;
   protected started = false;
   protected cryptoBootstrapped = false;
@@ -135,6 +99,7 @@ export abstract class MatrixClientBase {
     | import("./crypto-bootstrap.js").MatrixCryptoBootstrapper<MatrixRawEvent>
     | undefined;
   protected readonly autoBootstrapCrypto: boolean;
+  protected syncQuiescePromise: Promise<void> | null = null;
   protected stopPersistPromise: Promise<void> | null = null;
   protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
@@ -144,7 +109,34 @@ export abstract class MatrixClientBase {
   protected transactionScopeDeviceId: string | null;
   protected transactionScopeId: string | null = null;
   protected transactionScopePromise: Promise<string> | null = null;
-  private readonly messageWireDispatchGuards = new Map<string, MatrixMessageWireDispatchGuard>();
+  protected readonly messageWireDispatchGuards = new MatrixMessageWireDispatchGuards();
+  private readonly requestAbortController = new AbortController();
+  private readonly cryptoRequestOwner = new AsyncLocalStorage<{
+    callerAuthority: (() => void) | undefined;
+  }>();
+  private cryptoInitializationPromise: Promise<void> | null = null;
+  private sdkStopped = false;
+  private stopDiscardPromise: Promise<void> | null = null;
+  private idbPersistPromise: Promise<void> | null = null;
+  private idbPersistAbortController: AbortController | null = null;
+
+  private readonly assertClientActive = () => {
+    this.requestAbortController.signal.throwIfAborted();
+  };
+
+  private readonly captureRequestAuthority = (): (() => void) | undefined => {
+    const readAuthority = captureChannelReadAuthority();
+    const cryptoOwner = this.cryptoRequestOwner.getStore();
+    // A new read inside an SDK callback owns its own host scope.
+    return cryptoOwner && cryptoOwner.callerAuthority === readAuthority
+      ? this.assertClientActive
+      : readAuthority;
+  };
+
+  private withClientCryptoWork<T>(run: () => T): T {
+    this.assertClientActive();
+    return this.cryptoRequestOwner.run({ callerAuthority: captureChannelReadAuthority() }, run);
+  }
 
   readonly dms = {
     update: async (): Promise<boolean> => {
@@ -173,6 +165,7 @@ export abstract class MatrixClientBase {
       autoBootstrapCrypto?: boolean;
       ssrfPolicy?: SsrFPolicy;
       dispatcherPolicy?: PinnedDispatcherPolicy;
+      stateRuntime?: MatrixSnapshotStateRuntime;
     } = {},
   ) {
     this.transactionScopeHomeserver = homeserver;
@@ -183,6 +176,8 @@ export abstract class MatrixClientBase {
       accessToken,
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
+      captureRequestAuthority: this.captureRequestAuthority,
+      signal: this.requestAbortController.signal,
     });
     this.localTimeoutMs = resolveMatrixLocalTimeoutMs(opts.localTimeoutMs);
     this.initialSyncLimit = opts.initialSyncLimit;
@@ -195,15 +190,23 @@ export abstract class MatrixClientBase {
       : undefined;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
+    this.stateRuntime = opts.stateRuntime;
     this.selfUserId = opts.userId?.trim() || null;
     this.autoBootstrapCrypto = opts.autoBootstrapCrypto !== false;
-    this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyPath);
+    this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyPath, opts.stateRuntime);
     const cryptoCallbacks = this.encryptionEnabled
       ? this.recoveryKeyStore.buildCryptoCallbacks()
       : undefined;
     const guardedFetch = createMatrixGuardedFetch({
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
+      captureRequestAuthority: this.captureRequestAuthority,
+      signal: this.requestAbortController.signal,
+      beforeRequest: async (resource, init) => {
+        // Complete admitted key persistence before checking live wire authority.
+        await this.recoveryKeyStore.drainPendingPersistence();
+        await this.messageWireDispatchGuards.beforeRequest(resource, init);
+      },
     });
     this.client = createMatrixJsClient({
       baseUrl: homeserver,
@@ -212,13 +215,7 @@ export abstract class MatrixClientBase {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
-        const dispatch = resolveMessageWireDispatch(resource, init);
-        if (dispatch) {
-          await this.messageWireDispatchGuards.get(dispatch.transactionId)?.(dispatch);
-        }
-        return await guardedFetch(resource, init);
-      }) as typeof fetch,
+      fetchFn: guardedFetch,
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
@@ -228,25 +225,13 @@ export abstract class MatrixClientBase {
         VerificationMethod.Reciprocate,
       ],
     });
-  }
-
-  protected async withMessageWireDispatchGuard<T>(params: {
-    transactionId?: string;
-    guard?: MatrixMessageWireDispatchGuard;
-    run: () => Promise<T>;
-  }): Promise<T> {
-    if (!params.transactionId || !params.guard) {
-      return await params.run();
-    }
-    if (this.messageWireDispatchGuards.has(params.transactionId)) {
-      throw new Error(`Matrix transaction ${params.transactionId} already has a dispatch guard`);
-    }
-    this.messageWireDispatchGuards.set(params.transactionId, params.guard);
-    try {
-      return await params.run();
-    } finally {
-      this.messageWireDispatchGuards.delete(params.transactionId);
-    }
+    // SDK mappers and relations also call this method. Crypto retries belong to
+    // the client generation, while their callers retain their own read authority.
+    const decryptEventIfNeeded = this.client.decryptEventIfNeeded.bind(this.client);
+    this.client.decryptEventIfNeeded = (event, options) => {
+      this.captureRequestAuthority()?.();
+      return this.withClientCryptoWork(() => decryptEventIfNeeded(event, options));
+    };
   }
 
   on<TEvent extends keyof MatrixClientEventMap>(
@@ -333,7 +318,7 @@ export abstract class MatrixClientBase {
           return false;
         }
         const keyTuple = await secretStorage.getKey(defaultKeyId);
-        const key = this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+        const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
         if (!keyTuple || !key) {
           return false;
         }
@@ -480,21 +465,37 @@ export abstract class MatrixClientBase {
     if (this.started) {
       return;
     }
+    if (this.sdkStopped) {
+      throw new Error(
+        "Matrix client has been fully stopped and cannot be restarted; acquire a new shared client generation",
+      );
+    }
+    const assertCurrent = this.captureRequestAuthority();
+    assertCurrent?.();
+    this.assertClientActive();
 
     throwIfMatrixStartupAborted(opts.abortSignal);
     await this.ensureCryptoSupportInitialized();
+    assertCurrent?.();
     throwIfMatrixStartupAborted(opts.abortSignal);
     this.registerBridge();
-    await this.initializeCryptoIfNeeded(opts.abortSignal);
+    await this.withClientCryptoWork(() => this.initializeCryptoIfNeeded(opts.abortSignal));
+    assertCurrent?.();
+    throwIfMatrixStartupAborted(opts.abortSignal);
 
-    await this.client.startClient({
-      initialSyncLimit: this.initialSyncLimit,
-      ...(this.syncFilter ? { filter: Filter.fromJson(this.selfUserId, "", this.syncFilter) } : {}),
-    });
+    await this.withClientCryptoWork(() =>
+      this.client.startClient({
+        initialSyncLimit: this.initialSyncLimit,
+        ...(this.syncFilter
+          ? { filter: Filter.fromJson(this.selfUserId, "", this.syncFilter) }
+          : {}),
+      }),
+    );
     await this.waitForInitialSyncReady({
       abortSignal: opts.abortSignal,
       timeoutMs: opts.readyTimeoutMs,
     });
+    assertCurrent?.();
     throwIfMatrixStartupAborted(opts.abortSignal);
     if (opts.bootstrapCrypto && this.autoBootstrapCrypto) {
       await this.bootstrapCryptoIfNeeded(opts.abortSignal);
@@ -506,11 +507,16 @@ export abstract class MatrixClientBase {
   }
 
   async prepareForOneOff(): Promise<void> {
+    const assertCurrent = this.captureRequestAuthority();
+    assertCurrent?.();
+    this.assertClientActive();
     if (!this.encryptionEnabled) {
       return;
     }
     await this.ensureCryptoSupportInitialized();
-    await this.initializeCryptoIfNeeded();
+    assertCurrent?.();
+    await this.withClientCryptoWork(() => this.initializeCryptoIfNeeded());
+    assertCurrent?.();
     if (!this.crypto) {
       return;
     }
@@ -535,60 +541,94 @@ export abstract class MatrixClientBase {
     await this.startSyncSession({ bootstrapCrypto: false });
   }
 
-  stopSyncWithoutPersist(): void {
-    if (this.idbPersistTimer) {
-      clearInterval(this.idbPersistTimer);
-      this.idbPersistTimer = null;
+  private stopSdkClient(): void {
+    if (this.sdkStopped) {
+      return;
     }
     this.currentSyncState = null;
     this.currentSyncError = undefined;
+    this.sdkStopped = true;
     this.client.stopClient();
     this.started = false;
   }
 
+  async quiesceSync(): Promise<void> {
+    // Quiescence is terminal for a client generation. Memoize both success and
+    // failure so an untrusted cursor can never be persisted by a later retry.
+    this.syncQuiescePromise ??= quiesceMatrixClientSync({
+      client: this.client,
+      emitter: this.emitter,
+      markStopped: () => {
+        this.started = false;
+      },
+      started: this.started,
+      syncStore: this.syncStore,
+    });
+    await this.syncQuiescePromise;
+  }
+
   async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {
-    await this.decryptBridge?.drainPendingDecryptions(reason);
+    await this.withClientCryptoWork(() => this.decryptBridge?.drainPendingDecryptions(reason));
   }
 
   stop(): void {
-    this.stopSyncWithoutPersist();
-    this.decryptBridge?.stop();
-    // Final persist on shutdown
-    this.syncStore?.markCleanShutdown();
-    if (loadedMatrixCryptoRuntime) {
-      const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
-      this.stopPersistPromise = Promise.all([
-        persistIdbToDisk({
+    void this.stopAndPersist()
+      .catch(() => this.stopWithoutPersist())
+      .catch(noop);
+  }
+
+  private async stopClientGeneration(persist: boolean): Promise<void> {
+    try {
+      if (persist) {
+        await this.quiesceSync();
+      } else {
+        await this.quiesceSync().catch(noop);
+        this.syncStore?.discardPendingSyncCursorPersistence();
+      }
+      this.requestAbortController.abort(new Error("Matrix client generation is no longer active."));
+      // A one-off read can still be preparing crypto when its owner closes.
+      // Join that initialization before stopping the backend it may publish.
+      await this.cryptoInitializationPromise?.catch(noop);
+      clearInterval(this.idbPersistTimer ?? undefined);
+      this.idbPersistTimer = null;
+      this.idbPersistAbortController?.abort();
+      const activePeriodicPersist = this.idbPersistPromise;
+      try {
+        this.stopSdkClient();
+        this.decryptBridge?.stop();
+      } finally {
+        this.cryptoRequestOwner.disable();
+      }
+      await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
+      if (persist) {
+        const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
+        await runtime.persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop),
-        this.syncStore?.flush().catch(noop),
-      ]).then(() => undefined);
-      return;
+          strict: true,
+          stateRuntime: this.stateRuntime,
+        });
+        this.syncStore?.markCleanShutdown();
+        await this.syncStore?.flush();
+      }
+    } finally {
+      await this.recoveryKeyStore.close();
     }
-    this.stopPersistPromise = loadMatrixCryptoRuntime()
-      .then(async ({ persistIdbToDisk }) => {
-        await Promise.all([
-          persistIdbToDisk({
-            snapshotPath: this.idbSnapshotPath,
-            databasePrefix: this.cryptoDatabasePrefix,
-          }).catch(noop),
-          this.syncStore?.flush().catch(noop),
-        ]);
-      })
-      .catch(noop)
-      .then(() => undefined);
   }
 
   async stopAndPersist(): Promise<void> {
-    this.stop();
+    this.stopPersistPromise ??= this.stopClientGeneration(true);
     await this.stopPersistPromise;
   }
 
-  stopWithoutPersist(): void {
-    this.stopSyncWithoutPersist();
-    this.decryptBridge?.stop();
-    this.stopPersistPromise = Promise.resolve();
+  stopWithoutPersist(): Promise<void> {
+    // Memoization closes concurrent callers; durable failure still requires discard cleanup.
+    if (!this.stopPersistPromise) {
+      this.stopPersistPromise = this.stopDiscardPromise = this.stopClientGeneration(false);
+    }
+    return (this.stopDiscardPromise ??= this.stopPersistPromise.catch(() =>
+      this.stopClientGeneration(false),
+    ));
   }
 
   protected async bootstrapCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
@@ -645,14 +685,38 @@ export abstract class MatrixClientBase {
   }
 
   protected async initializeCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
-    if (!this.encryptionEnabled || this.cryptoInitialized) {
+    if (!this.encryptionEnabled) {
       return;
     }
+    if (this.cryptoInitializationPromise) {
+      await this.cryptoInitializationPromise;
+      throwIfMatrixStartupAborted(abortSignal);
+      return;
+    }
+    if (this.cryptoInitialized) {
+      return;
+    }
+    const initialization = this.initializeCrypto(
+      abortSignal
+        ? AbortSignal.any([abortSignal, this.requestAbortController.signal])
+        : this.requestAbortController.signal,
+    );
+    this.cryptoInitializationPromise = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (this.cryptoInitializationPromise === initialization) {
+        this.cryptoInitializationPromise = null;
+      }
+    }
+  }
+
+  private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
     const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
 
     // Restore persisted IndexedDB crypto store before initializing WASM crypto.
-    await restoreIdbFromDisk(this.idbSnapshotPath);
+    await restoreIdbFromDisk(this.idbSnapshotPath, this.stateRuntime);
     throwIfMatrixStartupAborted(abortSignal);
 
     try {
@@ -666,18 +730,33 @@ export abstract class MatrixClientBase {
       await persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
+        abortSignal,
+        stateRuntime: this.stateRuntime,
       });
       throwIfMatrixStartupAborted(abortSignal);
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        persistIdbToDisk({
+        if (this.idbPersistPromise) {
+          return;
+        }
+        const abortController = new AbortController();
+        this.idbPersistAbortController = abortController;
+        this.idbPersistPromise = persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop);
+          abortSignal: abortController.signal,
+          stateRuntime: this.stateRuntime,
+        })
+          .catch(noop)
+          .finally(() => {
+            this.idbPersistPromise = null;
+            this.idbPersistAbortController = null;
+          });
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
       this.idbPersistTimer.unref?.();
     } catch (err) {
+      throwIfMatrixStartupAborted(abortSignal);
       LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
     }
   }

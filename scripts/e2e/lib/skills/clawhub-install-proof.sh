@@ -65,6 +65,14 @@ NODE
 query="${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-homeassistant}"
 requested_slug="${OPENCLAW_SKILL_INSTALL_E2E_SLUG:-}"
 preferred_slug="${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-homeassistant-skill}"
+maintained_fixture=0
+if [ -z "${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-}" ] &&
+  [ -z "${OPENCLAW_SKILL_INSTALL_E2E_SLUG:-}" ] &&
+  [ -z "${OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG:-}" ]; then
+  maintained_fixture=1
+  query="gifgrep"
+  requested_slug="gifgrep"
+fi
 search_json="/tmp/openclaw-skill-install-search.json"
 resolve_json="/tmp/openclaw-skill-install-resolved.json"
 install_log="/tmp/openclaw-skill-install.log"
@@ -73,38 +81,90 @@ info_json="/tmp/openclaw-skill-install-info.json"
 echo "Searching live ClawHub skills for: $query"
 "${OPENCLAW_CMD[@]}" skills search "$query" --limit 8 --json >"$search_json"
 
-node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" <<'NODE'
+node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<'NODE'
 import fs from "node:fs";
-const [searchPath, resolvePath, requestedSlug, preferredSlug] = process.argv.slice(2);
+const [searchPath, resolvePath, requestedSlug, preferredSlug, maintainedFixture] = process.argv.slice(2);
 const payload = JSON.parse(fs.readFileSync(searchPath, "utf8"));
 const results = Array.isArray(payload) ? payload : Array.isArray(payload.results) ? payload.results : [];
 const slugs = results.map((entry) => String(entry.slug ?? "")).filter(Boolean);
-let chosen;
-if (requestedSlug) {
-  chosen = results.find((entry) => entry.slug === requestedSlug);
-  if (!chosen) {
+const hasExplicitRisk = (entry) =>
+  String(entry?.trust?.clawHubVerdict ?? "").toLowerCase() === "suspicious" ||
+  entry?.native?.skill?.isSuspicious === true;
+let candidates;
+if (maintainedFixture === "1") {
+  const maintained = results.find((entry) => {
+    if (hasExplicitRisk(entry)) return false;
+    if (entry?.slug !== "gifgrep" || entry.ownerHandle !== "steipete") return false;
+    const hasMappedRef = Object.hasOwn(entry, "installRef");
+    const hasRawIdentity = Object.hasOwn(entry, "source") || Object.hasOwn(entry, "install");
+    return (hasMappedRef || hasRawIdentity) &&
+      (!hasMappedRef || entry.installRef === "@steipete/gifgrep") &&
+      (!hasRawIdentity || (entry.source === "clawhub" &&
+        entry.install?.kind === "clawhub" &&
+        entry.install?.reference === "steipete/gifgrep"));
+  });
+  if (!maintained) {
+    throw new Error("Maintained ClawHub fixture @steipete/gifgrep not found with matching search identity");
+  }
+  candidates = [maintained];
+} else if (requestedSlug) {
+  const requested = results.find((entry) => entry.slug === requestedSlug);
+  if (!requested) {
     throw new Error(`Requested skill slug ${requestedSlug} not found. Search returned: ${slugs.join(", ") || "(none)"}`);
   }
+  candidates = [requested];
 } else {
-  chosen =
-    results.find((entry) => entry.slug === preferredSlug) ??
-    results.find((entry) => String(entry.slug ?? "").includes("homeassistant")) ??
-    results[0];
+  const safeResults = results.filter((entry) => !hasExplicitRisk(entry));
+  const preferred = safeResults.find((entry) => entry.slug === preferredSlug);
+  const homeassistant = safeResults.find((entry) => String(entry.slug ?? "").includes("homeassistant"));
+  candidates = [preferred, homeassistant, ...safeResults]
+    .filter((entry, index, ordered) => entry && ordered.indexOf(entry) === index);
 }
-if (!chosen?.slug) {
-  throw new Error(`No installable skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);
+if (!candidates[0]?.slug) {
+  throw new Error(`No non-suspicious skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);
 }
 fs.writeFileSync(resolvePath, `${JSON.stringify({
-  slug: chosen.slug,
-  version: chosen.version ?? null,
-  displayName: chosen.displayName ?? chosen.name ?? chosen.slug,
+  candidates: candidates.map((entry) => ({
+    slug: entry.slug,
+    installRef: maintainedFixture === "1" ? "@steipete/gifgrep" : entry.installRef ?? entry.slug,
+    version: entry.version ?? null,
+    displayName: entry.displayName ?? entry.name ?? entry.slug,
+  })),
 })}\n`);
 NODE
 
-slug="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).slug)' "$resolve_json")"
-echo "Installing live ClawHub skill: $slug"
-if ! "${OPENCLAW_CMD[@]}" skills install "$slug" --force >"$install_log" 2>&1; then
+slug=""
+install_ref=""
+while IFS=$'\t' read -r candidate_slug candidate_install_ref; do
+  echo "Installing live ClawHub skill: $candidate_slug"
+  install_args=("$candidate_install_ref")
+  if [ "$maintained_fixture" = "1" ]; then
+    install_args=("@steipete/gifgrep" --version 1.0.1)
+  fi
+  if "${OPENCLAW_CMD[@]}" skills install "${install_args[@]}" --force >"$install_log" 2>&1; then
+    slug="$candidate_slug"
+    install_ref="$candidate_install_ref"
+    break
+  fi
+  if [ -z "$requested_slug" ] && {
+    { grep -Fq "ClawHub Security Audit" "$install_log" && grep -Eq "Outcome: .*Blocked" "$install_log"; } ||
+      { grep -Fq "ClawHub found security risks" "$install_log" &&
+        grep -Fq "Update cancelled; rerun with --acknowledge-clawhub-risk" "$install_log"; }
+  }; then
+    echo "Skipping live ClawHub skill with current security findings: $candidate_slug"
+    continue
+  fi
   echo "Skill install failed" >&2
+  openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
+  exit 1
+done < <(node -e '
+  const payload = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  for (const candidate of payload.candidates) {
+    process.stdout.write(`${candidate.slug}\t${candidate.installRef}\n`);
+  }
+' "$resolve_json")
+if [ -z "$slug" ]; then
+  echo "No live ClawHub search candidate passed current security checks" >&2
   openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
   exit 1
 fi
@@ -120,10 +180,11 @@ openclaw_e2e_assert_file "$lock_json"
 
 "${OPENCLAW_CMD[@]}" skills info "$slug" --json >"$info_json"
 
-node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" <<'NODE'
+node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<'NODE'
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-const [configPath, skillDir, originPath, lockPath, infoPath, slug] = process.argv.slice(2);
+const [configPath, skillDir, originPath, lockPath, infoPath, slug, maintainedFixture] = process.argv.slice(2);
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 function isPathInside(parentPath, childPath) {
   const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
@@ -141,6 +202,12 @@ const lock = read(lockPath);
 if (lock.skills?.[slug]?.version !== origin.installedVersion) {
   throw new Error(`Lockfile missing ${slug}@${origin.installedVersion}`);
 }
+if (maintainedFixture === "1" && (
+  origin.ownerHandle !== "steipete" || lock.skills[slug].ownerHandle !== "steipete" ||
+  origin.installedVersion !== "1.0.1"
+)) {
+  throw new Error("Maintained ClawHub fixture origin/lock must identify @steipete/gifgrep@1.0.1");
+}
 const info = read(infoPath);
 const infoFilePath = info.filePath ?? info.skill?.filePath;
 const infoBaseDir = info.baseDir ?? info.skill?.baseDir;
@@ -153,7 +220,13 @@ if (
 if (infoBaseDir && path.resolve(infoBaseDir) !== path.resolve(skillDir)) {
   throw new Error(`skills info reported unexpected baseDir: ${infoBaseDir}`);
 }
-const skillText = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+const skillBytes = fs.readFileSync(path.join(skillDir, "SKILL.md"));
+if (maintainedFixture === "1" &&
+  createHash("sha256").update(skillBytes).digest("hex") !==
+    "1cf64ee164ffffac317b7156d0c107cff8714abe4ae6438387cf27d4a513890c") {
+  throw new Error("Maintained ClawHub fixture SKILL.md differs from the reviewed 1.0.1 source");
+}
+const skillText = skillBytes.toString("utf8");
 if (!/^name:\s*/m.test(skillText)) {
   throw new Error("Installed SKILL.md is missing frontmatter name");
 }

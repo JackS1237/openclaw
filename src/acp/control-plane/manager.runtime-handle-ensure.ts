@@ -18,6 +18,11 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  assertAcpRuntimeOwnerSupport,
+  isAcpOwnerRepairRequired,
+  persistedAcpRuntimeHandle,
+} from "./manager.runtime-owner.js";
 import type {
   AcpSessionManagerDeps,
   SessionAcpMeta,
@@ -35,14 +40,18 @@ import {
 export async function ensureManagerRuntimeHandle(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   meta: SessionAcpMeta;
+  selectedBackend?: string;
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
   isCurrentActor?: () => boolean;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(params.sessionKey);
+  }
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
   const mode = params.meta.mode;
@@ -50,9 +59,17 @@ export async function ensureManagerRuntimeHandle(params: {
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
-  const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  const configuredBackend = (
+    params.selectedBackend ||
+    params.meta.backend ||
+    params.cfg.acp?.backend ||
+    ""
+  ).trim();
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
-  const cached = params.runtimeHandles.get(params.sessionKey);
+  const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
+  const runtime = backend.runtime;
+  assertAcpRuntimeOwnerSupport(runtime, params);
+  const cached = params.runtimeHandles.get(params);
   if (cached) {
     const backendMatches = !configuredBackend || cached.backend === configuredBackend;
     const agentMatches = cached.agent === agent;
@@ -91,19 +108,23 @@ export async function ensureManagerRuntimeHandle(params: {
     }
     await params.runtimeHandles.close({
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       reason: "runtime-handle-replaced",
+      expectedHandle: cached.handle,
     });
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
   }
 
-  params.enforceConcurrentSessionLimit({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-
-  const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
-  const runtime = backend.runtime;
   const previousMeta = params.meta;
-  const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
+  const persistedIdentity = resolveSessionIdentityFromMeta(previousMeta);
+  // Identifiers belong to their persisted backend; a new backend may recover its own named session.
+  const backendOwnsPreviousIdentity = previousMeta.backend === backend.id;
+  const previousIdentity = backendOwnsPreviousIdentity ? persistedIdentity : undefined;
+  const persistedHandle = backendOwnsPreviousIdentity
+    ? persistedAcpRuntimeHandle(params, previousMeta)
+    : undefined;
   let identityForEnsure = previousIdentity;
   const persistedResumeSessionId =
     mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
@@ -115,10 +136,14 @@ export async function ensureManagerRuntimeHandle(params: {
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
+          persistedHandle,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           agent,
           mode,
           ...(resumeSessionId ? { resumeSessionId } : {}),
+          // Stored options lack caller intent; runtime controls validate the
+          // saved model before submitting any prompt.
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
@@ -142,7 +167,9 @@ export async function ensureManagerRuntimeHandle(params: {
       throw createSupersededActorError(params.sessionKey);
     }
     await runtime.prepareFreshSession?.({
+      persistedHandle,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     });
     if (!isCurrentActor()) {
       throw createSupersededActorError(params.sessionKey);
@@ -160,7 +187,7 @@ export async function ensureManagerRuntimeHandle(params: {
       if (!isCurrentActor()) {
         throw acpError;
       }
-      if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
+      if (isAcpOwnerRepairRequired(acpError) || acpError.code !== "ACP_SESSION_INIT_FAILED") {
         throw acpError;
       }
       logVerbose(
@@ -203,6 +230,8 @@ export async function ensureManagerRuntimeHandle(params: {
   const nextHandleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
   const nextHandle: AcpRuntimeHandle = {
     ...ensured,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     ...(nextHandleIdentifiers.backendSessionId
       ? { backendSessionId: nextHandleIdentifiers.backendSessionId }
       : {}),
@@ -225,26 +254,39 @@ export async function ensureManagerRuntimeHandle(params: {
   const shouldPersistMeta =
     previousMeta.backend !== nextMeta.backend ||
     previousMeta.runtimeSessionName !== nextMeta.runtimeSessionName ||
-    !identityEquals(previousIdentity, nextIdentity) ||
+    !identityEquals(persistedIdentity, nextIdentity) ||
     previousMeta.agent !== nextMeta.agent ||
     previousMeta.cwd !== nextMeta.cwd ||
     !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||
     hasLegacyAcpIdentityProjection(previousMeta);
   if (shouldPersistMeta) {
-    await params.writeSessionMeta({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      isCurrentActor,
-      mutate: (_current, entry) => {
-        if (!isCurrentActor()) {
-          return undefined;
-        }
-        if (!entry) {
-          return null;
-        }
-        return nextMeta;
-      },
-    });
+    try {
+      await params.writeSessionMeta({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        isCurrentActor,
+        mutate: (_current, entry) => {
+          if (!isCurrentActor()) {
+            return undefined;
+          }
+          if (!entry) {
+            return null;
+          }
+          return nextMeta;
+        },
+      });
+    } catch (error) {
+      // This handle has not entered the cache, so reset cleanup cannot capture it.
+      if (!isCurrentActor()) {
+        await closeSupersededRuntimeHandle({
+          runtime,
+          handle: nextHandle,
+          sessionKey: params.sessionKey,
+        });
+      }
+      throw error;
+    }
   }
   if (!isCurrentActor()) {
     await closeSupersededRuntimeHandle({
@@ -254,7 +296,7 @@ export async function ensureManagerRuntimeHandle(params: {
     });
     throw createSupersededActorError(params.sessionKey);
   }
-  params.runtimeHandles.set(params.sessionKey, {
+  params.runtimeHandles.set(params, {
     runtime,
     handle: nextHandle,
     backend: ensured.backend || backend.id,

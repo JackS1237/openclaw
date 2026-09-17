@@ -31,9 +31,6 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listRequests,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
 }));
-vi.mock("../runtime-plugin-config.js", () => ({
-  resolveGatewayPluginConfig: ({ config }: { config: unknown }) => config,
-}));
 
 import { channelPairingHandlers } from "./channel-pairing.js";
 
@@ -97,11 +94,11 @@ describe("channel DM pairing gateway handlers", () => {
   it("lists only pairing-policy accounts without exposing the human code", async () => {
     mocks.listRequests.mockResolvedValue([
       {
-        id: "+15551234567",
+        id: "workspace:personal:user:+15551234567",
         code: "SECRET12",
         createdAt: "2026-07-20T10:00:00.000Z",
         lastSeenAt: "2026-07-20T10:05:00.000Z",
-        meta: { accountId: "personal", name: "Alice" },
+        meta: { accountId: "personal", name: "Alice", senderId: "+15551234567" },
       },
     ]);
 
@@ -147,13 +144,13 @@ describe("channel DM pairing gateway handlers", () => {
 
   it("approves access even when the optional notification fails", async () => {
     mocks.approve.mockResolvedValue({
-      id: "+15551234567",
+      id: "workspace:personal:user:+15551234567",
       entry: {
-        id: "+15551234567",
+        id: "workspace:personal:user:+15551234567",
         code: "SECRET12",
         createdAt: "2026-07-20T10:00:00.000Z",
         lastSeenAt: "2026-07-20T10:00:00.000Z",
-        meta: { accountId: "personal" },
+        meta: { accountId: "personal", senderId: "+15551234567" },
       },
     });
     mocks.notify.mockRejectedValue(new Error("offline"));
@@ -174,7 +171,15 @@ describe("channel DM pairing gateway handlers", () => {
     });
     expect(mocks.bootstrapOwner).toHaveBeenCalledWith({
       channel: "whatsapp",
-      id: "+15551234567",
+      id: "workspace:personal:user:+15551234567",
+    });
+    expect(mocks.notify).toHaveBeenCalledWith({
+      channelId: "whatsapp",
+      accountId: "personal",
+      id: "workspace:personal:user:+15551234567",
+      cfg: expect.any(Object),
+      pairingAdapter: pairingPlugin.pairing,
+      meta: { accountId: "personal", senderId: "+15551234567" },
     });
     expect(respond).toHaveBeenCalledWith(
       true,

@@ -1,6 +1,9 @@
 /** Tests dynamic provider env-var discovery from plugin metadata. */
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import * as pluginConfigState from "../plugins/config-state.js";
+import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
@@ -126,7 +129,8 @@ function useRegistrySetupPlugin(id: string, origin: string, provider: MockSetupP
   useRegistryPlugins(setupPlugin(id, origin, provider));
 }
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
 
@@ -192,8 +196,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
   });
 
-  it("scrubs usage credentials from the active configured plugin snapshot", () => {
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+  it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
+    const configuredSnapshot = {
       workspaceDir: "/workspace",
       index: {
         plugins: [
@@ -227,7 +231,11 @@ describe("provider env vars dynamic manifest metadata", () => {
           },
         },
       ],
-    });
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { env?: NodeJS.ProcessEnv }) =>
+        !params.env || params.env === process.env ? configuredSnapshot : undefined,
+    );
 
     expect(
       sanitizeEnvVars({
@@ -285,6 +293,184 @@ describe("provider env vars dynamic manifest metadata", () => {
     ]);
     const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
     expect(snapshotOptions.preferPersisted).toBe(false);
+  });
+
+  it("expands provider-owned directory variables in manifest credential evidence", () => {
+    useRegistrySetupPlugin("external-cloud", "global", {
+      id: "external-cloud",
+      authEvidence: [
+        {
+          type: "local-file-with-env",
+          fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/application_default_credentials.json"],
+          requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+          credentialMarker: "external-cloud-local-credentials",
+          source: "external cloud credentials",
+        },
+      ],
+    });
+    const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
+    const expectedPath = "/fixture/cloud-sdk/application_default_credentials.json";
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return candidate === expectedPath;
+    });
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk",
+          EXTERNAL_CLOUD_PROJECT: "fixture-project",
+        }),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "external cloud credentials",
+      });
+      expect(existsSync).toHaveBeenCalledWith(expectedPath);
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("rejects stale home evidence when an explicit provider directory has no credentials", () => {
+    useRegistrySetupPlugin("external-cloud", "global", {
+      id: "external-cloud",
+      authEvidence: [
+        {
+          type: "local-file-with-env",
+          fallbackPaths: [
+            "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+            "${HOME}/credentials.json",
+            "${APPDATA}/credentials.json",
+          ],
+          credentialMarker: "external-cloud-local-credentials",
+        },
+      ],
+    });
+    const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return candidate === "/fixture/home/credentials.json";
+    });
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "/fixture/missing-cloud-sdk",
+          HOME: "/fixture/home",
+          APPDATA: "/fixture/appdata",
+        }),
+      ).toBeNull();
+      expect(existsSync).toHaveBeenCalledOnce();
+      expect(existsSync).toHaveBeenCalledWith("/fixture/missing-cloud-sdk/credentials.json");
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("preserves home and appdata fallback when no provider directory is selected", () => {
+    const fallbackPaths = [
+      "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      "${HOME}/credentials.json",
+      "${APPDATA}/credentials.json",
+    ];
+    const evidence = [
+      {
+        type: "local-file-with-env" as const,
+        fallbackPaths,
+        credentialMarker: "external-cloud-local-credentials",
+      },
+    ];
+    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return (
+        candidate === "/fixture/home/credentials.json" ||
+        candidate === "/fixture/appdata/credentials.json"
+      );
+    });
+
+    try {
+      expect(resolveLocalProviderAuthEvidence(evidence, { HOME: "/fixture/home" })).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+      expect(
+        resolveLocalProviderAuthEvidence(evidence, {
+          EXTERNAL_CLOUD_CONFIG: "   ",
+          HOME: "/fixture/missing-home",
+          APPDATA: "/fixture/appdata",
+        }),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it("accepts placeholder text introduced by an environment value", () => {
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(
+          [
+            {
+              type: "local-file-with-env",
+              fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/credentials.json"],
+              credentialMarker: "external-cloud-local-credentials",
+            },
+          ],
+          { EXTERNAL_CLOUD_CONFIG: "/fixture/${literal}" },
+        ),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+      expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      scenario: "missing variable",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      env: {},
+    },
+    {
+      scenario: "blank variable",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+      env: { EXTERNAL_CLOUD_CONFIG: "   " },
+    },
+    {
+      scenario: "invalid variable name",
+      fallbackPath: "${EXTERNAL-CLOUD-CONFIG}/credentials.json",
+      env: { "EXTERNAL-CLOUD-CONFIG": "/fixture/cloud-sdk" },
+    },
+    {
+      scenario: "unterminated placeholder",
+      fallbackPath: "${EXTERNAL_CLOUD_CONFIG/credentials.json",
+      env: { EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk" },
+    },
+  ])("rejects manifest credential evidence with a $scenario", ({ fallbackPath, env }) => {
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(
+          [
+            {
+              type: "local-file-with-env",
+              fallbackPaths: [fallbackPath],
+              credentialMarker: "external-cloud-local-credentials",
+            },
+          ],
+          env,
+        ),
+      ).toBeNull();
+      expect(existsSync).not.toHaveBeenCalled();
+    } finally {
+      existsSync.mockRestore();
+    }
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
@@ -543,7 +729,21 @@ describe("provider env vars dynamic manifest metadata", () => {
     ).toEqual(["WHISPERX_API_KEY"]);
   });
 
-  it("only loads plugin metadata snapshot once when resolving env var candidates, avoiding duplicate snapshot loads", () => {
+  it.each([
+    {
+      name: "auth candidates",
+      resolve: () => resolveProviderAuthEnvVarCandidates({ config: {} }).fireworks,
+      metadataLoads: 1,
+    },
+    {
+      name: "auth scrub keys",
+      resolve: () =>
+        listKnownProviderAuthEnvVarNames({ config: {} }).filter((key) =>
+          key.startsWith("FIREWORKS_"),
+        ),
+      metadataLoads: 2,
+    },
+  ])("resolves $name without repeated metadata discovery", ({ resolve, metadataLoads }) => {
     useInstalledSetupPlugin(
       "external-fireworks",
       "global",
@@ -553,13 +753,13 @@ describe("provider env vars dynamic manifest metadata", () => {
 
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
 
-    resolveProviderAuthEnvVarCandidates({ config: {} });
-
-    // Verify it was only called once, proving alias resolution reused the snapshot and did not perform a second cold load!
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    expect(resolve()).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.length).toBeLessThanOrEqual(
+      metadataLoads,
+    );
   });
 
-  it("resolves alias, env, and evidence lookup maps from one metadata snapshot", () => {
+  it("resolves auth maps with policy work bounded to contributing plugins", () => {
     useInstalledPlugins(
       {
         id: "external-fireworks",
@@ -591,11 +791,30 @@ describe("provider env vars dynamic manifest metadata", () => {
           "legacy-cloud-plan": "legacy-cloud",
         },
       },
+      { id: "channel-only", origin: "bundled", providers: [] },
+      {
+        id: "metadata-only",
+        origin: "bundled",
+        setup: {
+          requiresRuntime: false,
+          providers: [{ id: "metadata-only", envVars: ["METADATA_ONLY_API_KEY"] }],
+        },
+      },
     );
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    const policy = vi.spyOn(pluginConfigState, "resolveEffectivePluginActivationState");
+    let lookupMaps: ReturnType<typeof resolveProviderAuthLookupMaps>;
+    try {
+      lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+      expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("channel-only");
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("metadata-only");
+    } finally {
+      policy.mockRestore();
+    }
 
     expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
+    expect(lookupMaps.envCandidateMap["metadata-only"]).toEqual(["METADATA_ONLY_API_KEY"]);
     expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
       {
@@ -613,21 +832,79 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("excludes disabled plugin setup fallback refs from runtime auth lookup maps", () => {
-    useInstalledPlugins({
-      id: "disabled-setup-owner",
-      origin: "global",
-      enabled: false,
-      providers: ["disabled-cloud"],
-      providerAuthAliases: {
-        "disabled-cloud-plan": "disabled-cloud",
+  it("updates runtime auth evidence and fallback refs without dropping disabled credential hints", () => {
+    const plugin = setupPlugin(
+      "disabled-setup-owner",
+      "global",
+      {
+        id: "disabled-cloud",
+        envVars: ["DISABLED_CLOUD_API_KEY"],
+        authEvidence: [{ type: "local-file-with-env", credentialMarker: "cloud-local" }],
       },
-    });
+      {
+        enabled: false,
+        providers: ["disabled-cloud"],
+        providerAuthAliases: {
+          "disabled-cloud-plan": "disabled-cloud",
+        },
+      },
+    );
 
-    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(metadataSnapshot(plugin));
+    const config = { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } };
+    for (const enabled of [false, true, false]) {
+      config.plugins.entries["disabled-setup-owner"].enabled = enabled;
+      const lookupMaps = resolveProviderAuthLookupMaps({ config });
+      expect(lookupMaps.setupProviderFallbackRefs).toEqual(
+        enabled ? ["disabled-cloud", "disabled-cloud-plan"] : [],
+      );
+      expect(lookupMaps.authEvidenceMap["disabled-cloud-plan"]).toEqual(
+        enabled ? plugin.setup?.providers?.[0]?.authEvidence : undefined,
+      );
+      expect(lookupMaps.envCandidateMap["disabled-cloud-plan"]).toEqual(["DISABLED_CLOUD_API_KEY"]);
+    }
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
 
-    expect(lookupMaps.setupProviderFallbackRefs).toEqual([]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  it("preserves alias-chain expansion order and ownership of lookup results", () => {
+    const evidence = {
+      type: "local-file-with-env" as const,
+      fileEnvVar: "BASE_CREDENTIALS",
+      credentialMarker: "base-local-credentials",
+    };
+    useInstalledPlugins(
+      setupPlugin("base-owner", "global", {
+        id: "base",
+        envVars: ["BASE_API_KEY"],
+        authEvidence: [evidence],
+      }),
+      { id: "first-alias", origin: "global", providerAuthAliases: { z: "base" } },
+      { id: "second-alias", origin: "global", providerAuthAliases: { a: "z" } },
+      { id: "third-alias", origin: "global", providerAuthAliases: { b: "a" } },
+    );
+
+    const first = resolveProviderAuthLookupMaps({ config: {} });
+    expect(Object.keys(first.aliasMap)).toEqual(["z", "a", "b"]);
+    expect(first.aliasMap).toEqual({ z: "base", a: "z", b: "a" });
+    expect(Object.getPrototypeOf(first.aliasMap)).toBeNull();
+    expect(first.envCandidateMap.base).toEqual(["BASE_API_KEY"]);
+    expect(first.envCandidateMap.z).toEqual(["BASE_API_KEY"]);
+    expect(first.envCandidateMap.a).toBeUndefined();
+    expect(first.envCandidateMap.b).toBeUndefined();
+    expect(first.authEvidenceMap).toEqual({ base: [evidence], z: [evidence] });
+    expect(first.authEvidenceMap.z?.[0]).toBe(evidence);
+    expect(first.setupProviderFallbackRefs).toEqual(["a", "b", "base", "z"]);
+
+    const second = resolveProviderAuthLookupMaps({ config: {} });
+    expect(second).toEqual(first);
+    expect(second.aliasMap).not.toBe(first.aliasMap);
+    expect(second.envCandidateMap).not.toBe(first.envCandidateMap);
+    expect(second.envCandidateMap.z).not.toBe(first.envCandidateMap.z);
+    expect(second.authEvidenceMap).not.toBe(first.authEvidenceMap);
+    expect(second.authEvidenceMap.z).not.toBe(first.authEvidenceMap.z);
+    expect(second.authEvidenceMap.z?.[0]).toBe(evidence);
+    expect(second.setupProviderFallbackRefs).not.toBe(first.setupProviderFallbackRefs);
+    expect(second.envCandidateMap.openai).toBe(first.envCandidateMap.openai);
   });
 
   it("does not reuse a load-path current snapshot for default provider env lookups without parameters", () => {

@@ -27,8 +27,11 @@ export {
 } from "../infra/sqlite-strict.js";
 export type {
   OpenKeyedStoreOptions,
+  PluginStateCompareIntent,
+  PluginStateCompareResult,
   PluginStateEntry,
   PluginStateKeyedStore,
+  PluginStateObservation,
   PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
@@ -37,11 +40,3 @@ export type {
   PluginBlobEntryInfo,
   PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
-export {
-  PluginStateLeaseError,
-  type PluginStateLeaseContext,
-  type PluginStateLeaseDatabase,
-  type PluginStateLeaseErrorCode,
-  type PluginStateLeaseOptions,
-  type PluginStateLeaseRunner,
-} from "../plugin-state/plugin-state-lease.types.js";

@@ -8,30 +8,30 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionCompactionCheckpointReason,
-  SessionEntry,
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+  type SessionCompactionCheckpointReason,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadSessionEntry,
-  loadTranscriptEventsSync,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
   type SessionCompactionCheckpointMutationResult,
-  updateSessionEntry,
+  type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import {
-  branchSqliteCompactionCheckpointSession,
-  restoreSqliteCompactionCheckpointSession,
-} from "../config/sessions/session-accessor.sqlite.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+  branchCompactionCheckpointSession,
+  restoreCompactionCheckpointSession,
+} from "../config/sessions/session-accessor.sqlite-checkpoint.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -65,19 +65,25 @@ export function resolveCompactionCheckpointTranscriptPosition(params: {
   };
 }
 
-type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
+type CompactionCheckpointSessionMutationResult =
+  | SessionCompactionCheckpointMutationResult
+  | { status: "conflict" };
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
 type BranchCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sourceKey: string;
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  creation?: Parameters<typeof branchCompactionCheckpointSession>[0]["creation"];
 };
 
 type RestoreCheckpointSessionParams = {
   agentId?: string;
+  expectedState: SessionEntryExpectedState;
   storePath: string;
   sessionKey: string;
   sessionStoreKey?: string;
@@ -85,9 +91,7 @@ type RestoreCheckpointSessionParams = {
 };
 
 type PersistSessionCompactionCheckpointParams = {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  sessionId: string;
+  sessionTarget: SessionTranscriptRuntimeTarget;
   reason: SessionCompactionCheckpointReason;
   snapshot: CapturedCompactionCheckpointSnapshot;
   summary?: string;
@@ -344,7 +348,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
 ): Promise<{ entryId: string; leafId: string | null } | null> {
   if (typeof sessionFile !== "string") {
-    const records = loadTranscriptEventsSync(sessionFile).filter(
+    const records = (await loadTranscriptEvents(sessionFile)).filter(
       (event): event is Record<string, unknown> =>
         Boolean(event) && typeof event === "object" && !Array.isArray(event),
     );
@@ -352,7 +356,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
   }
   const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
   if (sqliteMarker) {
-    const records = loadTranscriptEventsSync(sqliteMarker).filter(
+    const records = (await loadTranscriptEvents(sqliteMarker)).filter(
       (event): event is Record<string, unknown> =>
         Boolean(event) && typeof event === "object" && !Array.isArray(event),
     );
@@ -428,7 +432,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
 }
 
 function readSessionLeafStateFromRecords(
-  records: readonly Record<string, unknown>[],
+  records: readonly { type?: unknown; id?: unknown }[],
 ): { entryId: string; leafId: string | null } | null {
   let latestEntryId: string | undefined;
   for (const record of records) {
@@ -450,12 +454,13 @@ function readSessionLeafStateFromRecords(
 function resolveCheckpointTranscriptForkSource(
   checkpoint: SessionCompactionCheckpoint,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
       sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: checkpointTokensTrusted ? checkpoint.tokensBefore : undefined,
     };
   }
 
@@ -471,7 +476,7 @@ function resolveCheckpointTranscriptForkSource(
   return {
     sourceFile: postCompactionFile,
     sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
+    totalTokens: checkpointTokensTrusted ? checkpoint.tokensAfter : undefined,
   };
 }
 
@@ -532,12 +537,14 @@ async function branchCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await branchSqliteCompactionCheckpointSession({
+  return await branchCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sourceKey: params.sourceKey,
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
+    creation: params.creation,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -554,11 +561,12 @@ async function restoreCheckpointSessionFromStoredBoundary(
   const legacySource = await prepareLegacyCheckpointSource(
     findCheckpoint(entry, params.checkpointId),
   );
-  return await restoreSqliteCompactionCheckpointSession({
+  return await restoreCompactionCheckpointSession({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     checkpointId: params.checkpointId,
+    expectedState: params.expectedState,
     ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -610,7 +618,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries();
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,
@@ -696,6 +704,7 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
 async function persistSessionCompactionCheckpoint(
   params: PersistSessionCompactionCheckpointParams,
 ): Promise<SessionCompactionCheckpoint | null> {
+  const target = params.sessionTarget;
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
   const snapshotSqliteMarker = parseSqliteSessionFileMarker(snapshotSessionFile);
@@ -705,22 +714,21 @@ async function persistSessionCompactionCheckpoint(
   const postSourceLeafId = params.postEntryId?.trim() || params.postLeafId?.trim();
   if (!snapshotArtifactFile && !postSourceLeafId) {
     log.warn("skipping compaction checkpoint persist: missing stable fork source", {
-      sessionKey: params.sessionKey,
+      sessionKey: target.sessionKey,
     });
     return null;
   }
 
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.sessionKey,
-  });
+  // Snapshot sizing may outlive this owner; revalidate its captured context inside the commit.
+  const assertCommitAllowed = captureOwnedTranscriptWriteAssertion(target);
   const createdAt = params.createdAt ?? Date.now();
   const checkpoint: SessionCompactionCheckpoint = {
     checkpointId: randomUUID(),
-    sessionKey: target.canonicalKey,
-    sessionId: params.sessionId,
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
     createdAt,
     reason: params.reason,
+    tokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...(typeof params.tokensBefore === "number" ? { tokensBefore: params.tokensBefore } : {}),
     ...(typeof params.tokensAfter === "number" ? { tokensAfter: params.tokensAfter } : {}),
     ...(params.summary?.trim() ? { summary: params.summary.trim() } : {}),
@@ -734,24 +742,20 @@ async function persistSessionCompactionCheckpoint(
       ...(params.snapshot.entryId?.trim() ? { entryId: params.snapshot.entryId.trim() } : {}),
     },
     postCompaction: {
-      sessionId: params.sessionId,
+      sessionId: target.sessionId,
       ...(postArtifactFile ? { sessionFile: postArtifactFile } : {}),
       ...(params.postLeafId?.trim() ? { leafId: params.postLeafId.trim() } : {}),
       ...(params.postEntryId?.trim() ? { entryId: params.postEntryId.trim() } : {}),
     },
   };
 
-  let trimmedCheckpoints:
-    | {
-        kept: SessionCompactionCheckpoint[] | undefined;
-        removed: SessionCompactionCheckpoint[];
-      }
-    | undefined;
+  let trimmedCheckpoints: ReturnType<typeof trimSessionCheckpoints> | undefined;
   let stored = false;
-  const updatedEntry = await updateSessionEntry(
+  const updatedEntry = await patchSessionEntryCore(
     {
+      agentId: target.agentId,
       storePath: target.storePath,
-      sessionKey: target.canonicalKey,
+      sessionKey: target.sessionKey,
     },
     async (existing) => {
       if (!existing.sessionId) {
@@ -767,11 +771,12 @@ async function persistSessionCompactionCheckpoint(
         compactionCheckpoints: trimmedCheckpoints.kept,
       };
     },
+    { assertCommitAllowed },
   );
 
   if (!updatedEntry || !stored) {
     log.warn("skipping compaction checkpoint persist: session not found", {
-      sessionKey: params.sessionKey,
+      sessionKey: target.sessionKey,
     });
     return null;
   }

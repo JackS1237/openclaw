@@ -4,13 +4,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  defaultQaModelForMode,
   normalizeQaProviderMode,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
-import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
+import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
@@ -24,20 +24,17 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
-export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+// External runtimes such as ACPX must be selected by the fixture that needs them.
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);
 export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
+const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
-function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
 }
 
 function remapQaMockModelRefForCodex(modelRef: string) {
@@ -56,6 +53,7 @@ export function buildQaGatewayConfig(params: {
   gatewayToken: string;
   providerBaseUrl?: string;
   workspaceDir: string;
+  stampCurrentVersion?: boolean;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
@@ -76,14 +74,12 @@ export function buildQaGatewayConfig(params: {
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
-  const normalizedPrimaryModel = normalizeQaGatewayModelRef(
-    params.primaryModel,
-    defaultQaModelForMode(providerMode),
-  );
-  const normalizedAlternateModel = normalizeQaGatewayModelRef(
-    params.alternateModel,
-    defaultQaModelForMode(providerMode, { alternate: true }),
-  );
+  const { primaryModel: normalizedPrimaryModel, alternateModel: normalizedAlternateModel } =
+    resolveQaRuntimeModelPair({
+      providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+    });
   const primaryModel = usesCodexMockAppServer
     ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
     : normalizedPrimaryModel;
@@ -114,12 +110,15 @@ export function buildQaGatewayConfig(params: {
       .map((pluginId) => pluginId.trim())
       .filter((pluginId) => pluginId.length > 0),
   );
+  // Only canonical frontier provider ids are also plugin ids. Provider aliases
+  // and custom providers rely on the explicit owner mapping supplied above.
+  const inferredProviderPluginIds = selectedProviderIds.filter((providerId) =>
+    QA_DIRECT_FRONTIER_PLUGIN_IDS.has(providerId),
+  );
   const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
     : provider.usesModelProviderPlugins
-      ? uniqueStrings(
-          (params.enabledPluginIds?.length ?? 0) > 0 ? configuredPluginIds : selectedProviderIds,
-        )
+      ? uniqueStrings([...configuredPluginIds, ...inferredProviderPluginIds])
       : configuredPluginIds;
   // A forced Codex cell must stage its harness even when the provider owner is
   // selected independently; otherwise its QA-only sandbox never takes effect.
@@ -133,17 +132,22 @@ export function buildQaGatewayConfig(params: {
   const pluginEntries = Object.fromEntries(
     selectedPluginIds.map((pluginId) => [
       pluginId,
-      params.forcedRuntime === "codex" && pluginId === "codex"
+      pluginId === "acpx"
         ? {
             enabled: true,
-            config: {
-              appServer: {
-                sandbox: "workspace-write",
-                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
-              },
-            },
+            config: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
           }
-        : { enabled: true },
+        : params.forcedRuntime === "codex" && pluginId === "codex"
+          ? {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "workspace-write",
+                  ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+                },
+              },
+            }
+          : { enabled: true },
     ]),
   );
   const transportPluginEntries = Object.fromEntries(
@@ -197,7 +201,7 @@ export function buildQaGatewayConfig(params: {
   const mockMemorySearch =
     provider.kind === "mock"
       ? {
-          provider: "openai",
+          provider: "openai-compatible",
           model: "text-embedding-3-small",
           remote: {
             // Memory embeddings bypass the model runtime, so bind them to the
@@ -209,11 +213,14 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
-    meta: {
-      lastTouchedVersion: OPENCLAW_VERSION,
+    ...(params.stampCurrentVersion === false
+      ? {}
+      : { meta: { lastTouchedVersion: OPENCLAW_VERSION } }),
+    // Keep daily rollover and pruning inside the owned QA workspace.
+    logging: {
+      file: `${params.workspaceDir}/logs/openclaw-YYYY-MM-DD.log`,
     },
     memory: {
-      backend: "builtin",
       search: {
         ...mockMemorySearch,
       },
@@ -224,13 +231,6 @@ export function buildQaGatewayConfig(params: {
         memory: "memory-core",
       },
       entries: {
-        acpx: {
-          enabled: true,
-          config: {
-            pluginToolsMcpBridge: true,
-            openClawToolsMcpBridge: true,
-          },
-        },
         "memory-core": {
           enabled: true,
         },
@@ -257,6 +257,7 @@ export function buildQaGatewayConfig(params: {
           [primaryModel]: resolveModelEntry(primaryModel),
           [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,
@@ -264,7 +265,6 @@ export function buildQaGatewayConfig(params: {
       },
       entries: {
         qa: {
-          default: true,
           model: buildQaModelSelection(primaryModel, alternateModel),
           ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
             ? { fastModeDefault: params.fastMode }
@@ -290,6 +290,20 @@ export function buildQaGatewayConfig(params: {
       // environment defaults to a messaging-only profile.
       profile: "coding",
     },
+    ...(transportPluginIds.includes("qa-channel")
+      ? {
+          commands: {
+            // QA scenarios use distinct synthetic sender identities. Keep their
+            // ordinary command access aligned with the open qa-channel fixture
+            // while reserving owner-only commands for the restart operator.
+            allowFrom: { "qa-channel": ["*"] },
+            // Restart notices are re-authorized after the plugin registry has
+            // been torn down. Retain both sender and routable target forms so
+            // the fallback owner check remains exact across that boundary.
+            ownerAllowFrom: ["qa-channel:qa-operator", "qa-channel:dm:qa-operator"],
+          },
+        }
+      : {}),
     ...(gatewayModels
       ? {
           models: {

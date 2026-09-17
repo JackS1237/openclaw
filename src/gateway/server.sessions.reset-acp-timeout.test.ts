@@ -1,6 +1,8 @@
 // ACP reset timeout regressions verify that stuck manager cleanup cannot poison
 // the next runtime session or prevent reset from completing.
 import { afterEach, expect, test, vi } from "vitest";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -14,11 +16,15 @@ import {
   acpRuntimeMocks,
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const {
+  createSessionStoreDir,
+  createConfiguredGlobalAgentSessionStore,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -103,9 +109,14 @@ test("sessions.reset force-discards ACP runtime ownership after cancel timeout",
       cfg: expect.any(Object),
       sessionKey: "agent:main:main",
       reason: "session-reset",
+      agentId: "main",
+      isCurrent: expect.any(Function),
+      assertCurrent: undefined,
     });
     expect(acpManagerMocks.closeSession).not.toHaveBeenCalled();
-    expect(prepareFreshSession).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
+    expect(prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+    );
     expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
       "acp",
     );
@@ -137,8 +148,13 @@ test("sessions.reset force-discards ACP actor ownership after close timeout", as
       cfg: expect.any(Object),
       sessionKey: "agent:main:main",
       reason: "session-reset",
+      agentId: "main",
+      isCurrent: expect.any(Function),
+      assertCurrent: undefined,
     });
-    expect(prepareFreshSession).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
+    expect(prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+    );
     expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
   } finally {
     releaseClose?.();
@@ -146,3 +162,100 @@ test("sessions.reset force-discards ACP actor ownership after close timeout", as
     acpManagerMocks.closeSession.mockImplementation(async () => {});
   }
 });
+
+test.each([true, false])(
+  "reset binds legacy ACP metadata to the committed canonical row (existing=%s)",
+  async (existing) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: existing ? { main: sessionStoreEntry("legacy-main") } : {},
+    });
+    const { identity: _identity, ...legacyMeta } = resolvedAcpMeta();
+    writeAcpSessionMetaForMigration({ sessionKey: "agent:main:main", meta: legacyMeta });
+    const reset = await directSessionReq("sessions.reset", { key: "main" });
+    expect(reset.ok).toBe(true);
+    const entry = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
+    expect(entry?.lifecycleRevision).toEqual(expect.any(String));
+    const meta = readAcpSessionMeta({ sessionKey: "agent:main:main", agentId: "main" });
+    expect(meta).toMatchObject({ backend: "acpx", agent: "codex", identity: { state: "pending" } });
+    expect(loadSessionEntry({ storePath, sessionKey: "main" })?.sessionId).toBe(entry?.sessionId);
+  },
+);
+
+test.each(["global", "agent:work:main"])(
+  "reset of %s preserves the other agent's ACP owner",
+  async (key) => {
+    const stores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
+    try {
+      const cfg = stores.getRuntimeConfig();
+      const mainMeta = { ...resolvedAcpMeta(), runtimeSessionName: "main-owned" };
+      const workMeta = { ...resolvedAcpMeta(), runtimeSessionName: "work-owned" };
+      writeAcpSessionMetaForMigration({
+        sessionKey: buildAcpDatabaseSessionKey("global", "main"),
+        meta: mainMeta,
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: buildAcpDatabaseSessionKey("global", "work"),
+        meta: workMeta,
+      });
+      const before = readAcpSessionMeta({ cfg, sessionKey: "global", agentId: "main" });
+      const reset = await directSessionReq("sessions.reset", { key, agentId: "work" });
+      expect(reset.ok).toBe(true);
+      expect(readAcpSessionMeta({ cfg, sessionKey: "global", agentId: "main" })).toEqual(before);
+      expect(readAcpSessionMeta({ cfg, sessionKey: "global", agentId: "work" })).toMatchObject({
+        runtimeSessionName: "work-owned",
+        identity: { state: "pending" },
+      });
+      expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work" }),
+      );
+    } finally {
+      await resetConfiguredGlobalAgentSessionStore(stores);
+    }
+  },
+);
+
+test.each(["owner-repair", "discard-error"] as const)(
+  "reset does not commit when cleanup fails with %s",
+  async (failure) => {
+    const { storePath } = await seedAcpSession();
+    const before = loadSessionEntry({ storePath, sessionKey: "agent:main:main" });
+    const error =
+      failure === "owner-repair"
+        ? new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
+            detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+          })
+        : new Error("force discard failed");
+    const timeoutSpy = accelerateAcpCleanupTimeout();
+    let release: (() => void) | undefined;
+    try {
+      if (failure === "owner-repair") {
+        acpManagerMocks.cancelSession.mockRejectedValueOnce(error);
+      } else {
+        acpManagerMocks.cancelSession.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+            }),
+        );
+        acpManagerMocks.forceDiscardSessionRuntime.mockRejectedValueOnce(error);
+      }
+      const { performGatewaySessionReset } = await import("./session-reset-service.js");
+      const pending = performGatewaySessionReset({
+        key: "main",
+        reason: "reset",
+        commandSource: "gateway:sessions.reset",
+        workerPlacementContext: {},
+      });
+      if (failure === "discard-error") {
+        await expect(pending).rejects.toThrow("force discard failed");
+      } else {
+        expect((await pending).ok).toBe(false);
+      }
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).toEqual(before);
+    } finally {
+      release?.();
+      timeoutSpy.mockRestore();
+    }
+  },
+);

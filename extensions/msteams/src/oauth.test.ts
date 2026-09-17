@@ -137,12 +137,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
   });
 
   it("throws on a 400 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
     await expect(
       exchangeMSTeamsCodeForTokens({
@@ -188,6 +183,23 @@ describe("exchangeMSTeamsCodeForTokens", () => {
         clientId: "c",
         clientSecret: "s", // pragma: allowlist secret
         code: "unsafe-expiry",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
+  });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token exchange response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "invalid-shape",
         verifier: "v",
       }),
     ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
@@ -258,12 +270,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
   });
 
   it("throws on a 401 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 401 }));
 
     await expect(
       refreshMSTeamsDelegatedTokens({
@@ -291,5 +298,21 @@ describe("refreshMSTeamsDelegatedTokens", () => {
         refreshToken: "bad-json",
       }),
     ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
+  });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token refresh response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "rt",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: invalid token response fields");
   });
 });

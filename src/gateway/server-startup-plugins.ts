@@ -1,20 +1,34 @@
-// Gateway plugin startup bootstrap and adjacent startup maintenance.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  completePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
+import {
+  markPluginRegistryActive,
+  withPluginRegistryPreparationScope,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { disposePluginRegistryInstances, getActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -131,22 +145,22 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
-  // Startup logging consumes the same process-stable manifest snapshot used for
-  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  // Startup logging and lifecycle publication consume the process-stable metadata snapshot.
+  // Minimal gateways skip runtime lookup-table construction, not metadata ownership.
   const pluginManifestRecords =
     pluginLookUpTable?.manifestRegistry.plugins ??
     params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
@@ -166,19 +180,46 @@ export async function prepareGatewayPluginBootstrap(params: {
       : new Set<string>();
 
   const baseMethods = listGatewayMethods();
+  // Core requests need a live local registry without displacing another Gateway's plugins.
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  // Minimal gateway tests reuse an already-active registry when present. Production publishes
-  // an empty pre-bind registry; every startup plugin runtime attaches after the listener binds.
-  const pluginRegistry = params.minimalTestGateway
-    ? (getActivePluginRegistry() ?? emptyPluginRegistry)
-    : emptyPluginRegistry;
-  setActivePluginRegistry(pluginRegistry);
+  markPluginRegistryActive(emptyPluginRegistry);
+  const pluginRegistry =
+    params.minimalTestGateway && !pluginsGloballyDisabled
+      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+      : emptyPluginRegistry;
+  const metadataSnapshot =
+    getGatewayPluginMetadataSnapshot() ??
+    completePluginMetadataSnapshot({
+      snapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
+      config: activationSourceConfig,
+      env: process.env,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  // Requests can reach this registry before runtime attachment (or without it).
+  // Carry the complete boot generation so cold capabilities never rediscover source plugins.
+  setPluginRuntimeLoadContext(pluginRegistry, {
+    rawConfig: params.cfgAtStart,
+    config: gatewayPluginConfig,
+    activationSourceConfig,
+    autoEnabledReasons: {},
+    workspaceDir: pluginWorkspaceDir,
+    env: process.env,
+    logger: params.log,
+    metadataSnapshot,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
+    installRecords: metadataSnapshot
+      ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+      : undefined,
+    preferBuiltPluginArtifacts: true,
+  });
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
+    pluginMetadataSnapshot: metadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,
@@ -194,7 +235,7 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
@@ -213,7 +254,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];
@@ -222,11 +263,26 @@ export async function loadGatewayStartupPluginRuntime(params: {
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
-  const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  const loaded = loadGatewayStartupPlugins({
+  const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
+    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
+    if (!currentPluginRegistry) {
+      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
+    }
+    return {
+      pluginRegistry: currentPluginRegistry,
+      gatewayMethods: params.baseMethods,
+    };
+  }
+  const loaded = prepareGatewayPluginLoad({
+    loadIntent: "startup",
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
@@ -241,11 +297,29 @@ export async function loadGatewayStartupPluginRuntime(params: {
     channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
-  warnUnregisteredConfiguredMemoryEmbeddingProviders({
-    config: params.cfg,
-    pluginRegistry: loaded.pluginRegistry,
-    log: params.log,
-  });
-  return loaded;
+  try {
+    withPluginRegistryPreparationScope(loaded.pluginRegistry, () =>
+      withPluginRuntimeRegistryScope(loaded.pluginRegistry, () =>
+        validateConfiguredBindings(loaded.resolvedConfig),
+      ),
+    );
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: loaded.resolvedConfig,
+      pluginRegistry: loaded.pluginRegistry,
+      log: params.log,
+    });
+    return loaded;
+  } catch (error) {
+    loaded.retireGatewayRuntimeBindings();
+    await disposePluginRegistryInstances(loaded.pluginRegistry).catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], "Startup plugin candidate cleanup failed", {
+        cause: error,
+      });
+    });
+    throw error;
+  }
 }

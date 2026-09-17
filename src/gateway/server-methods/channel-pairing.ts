@@ -28,8 +28,8 @@ import {
   listChannelPairingRequests,
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
+import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -149,17 +149,20 @@ function publicRequest(params: {
   }
   const metadata = params.request.meta
     ? Object.fromEntries(
-        Object.entries(params.request.meta).filter(([key, value]) => key !== "accountId" && value),
+        Object.entries(params.request.meta).filter(
+          ([key, value]) => key !== "accountId" && key !== "senderId" && value,
+        ),
       )
     : undefined;
   const createdAtMs = Date.parse(params.request.createdAt);
+  const senderId = params.request.meta?.senderId ?? params.request.id;
   return {
     requestId: resolveChannelPairingRequestId(params.account.plugin.id, params.request),
     channel: params.account.plugin.id,
     channelLabel: params.account.plugin.meta.label,
     accountId: params.account.accountId,
     ...(params.account.accountLabel ? { accountLabel: params.account.accountLabel } : {}),
-    senderId: params.request.id,
+    senderId,
     senderLabel: adapter.idLabel,
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
     createdAt: params.request.createdAt,
@@ -207,7 +210,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     }
     try {
       const parsed = params as ChannelsPairingListParams;
-      const cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const cfg = context.getRuntimeConfig();
       const accounts = await listPairingAccounts({
         cfg,
         ...(parsed.channel ? { channel: parsed.channel } : {}),
@@ -255,7 +258,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     let cfg: OpenClawConfig;
     let account: PairingAccount | null;
     try {
-      cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      cfg = context.getRuntimeConfig();
       account = await resolvePairingAccount({
         cfg,
         channel: parsed.channel,
@@ -315,6 +318,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
               id: approved.id,
               cfg,
               pairingAdapter: account.plugin.pairing,
+              ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
             });
             notification = "sent";
           } catch (error) {
@@ -330,14 +334,14 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         true,
         {
           requestId: parsed.requestId,
-          senderId: approved.id,
+          senderId: approved.entry.meta?.senderId ?? approved.id,
           notification,
           commandOwnerBootstrap,
         },
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+      respondUnavailable(respond, error);
     }
   },
 
@@ -355,7 +359,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     const parsed = params as ChannelsPairingDismissParams;
     let account: PairingAccount | null;
     try {
-      const cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const cfg = context.getRuntimeConfig();
       account = await resolvePairingAccount({
         cfg,
         channel: parsed.channel,
@@ -369,7 +373,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
       invalidPairingAccount(respond, parsed.channel, parsed.accountId);
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const dismissed = await dismissChannelPairingRequest({
         channel: account.plugin.id,
         accountId: account.accountId,
@@ -383,9 +387,14 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { requestId: parsed.requestId, senderId: dismissed.id }, undefined);
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
-    }
+      respond(
+        true,
+        {
+          requestId: parsed.requestId,
+          senderId: dismissed.entry.meta?.senderId ?? dismissed.id,
+        },
+        undefined,
+      );
+    });
   },
 };

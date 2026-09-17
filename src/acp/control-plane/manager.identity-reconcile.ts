@@ -16,21 +16,33 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
-import type { SessionAcpMeta, WriteManagerSessionMeta } from "./manager.types.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
+import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 /** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
 export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
   isCurrentActor?: () => boolean;
-  setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
-  writeSessionMeta: WriteManagerSessionMeta;
+  setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
+  writeSessionMeta: (params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    agentId: string;
+    mutate: (
+      current: SessionAcpMeta | undefined,
+      entry: SessionEntry | undefined,
+    ) => SessionAcpMeta | null | undefined;
+    failOnError?: boolean;
+    isCurrentActor?: () => boolean;
+  }) => Promise<SessionEntry | null>;
 }): Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
@@ -52,7 +64,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         fallbackMessage: "Could not read ACP runtime status.",
       });
     } catch (error) {
-      if (params.failOnStatusError) {
+      if (params.failOnStatusError || isAcpOwnerRepairRequired(error)) {
         throw error;
       }
       if (!isCurrentActor()) {
@@ -109,10 +121,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       }
     : params.handle;
   if (handleChanged) {
-    if (!isCurrentActor()) {
-      throw createSupersededActorError(params.sessionKey);
-    }
-    params.setCachedHandle(params.sessionKey, nextHandle);
+    params.setCachedHandle(params, nextHandle);
   }
 
   const metaChanged =
@@ -159,6 +168,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     isCurrentActor,
     mutate: (current, entry) => {
       if (!isCurrentActor()) {

@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
@@ -16,6 +17,29 @@ import {
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
 describe("Microsoft Teams meeting platform adapter", () => {
+  it.each([true, false])(
+    "starts browser capture only for the current Teams session (owner=%s)",
+    async (owns) => {
+      const source = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+        action: "start",
+        captureId: "capture-1",
+        meetingSessionId: "session-1",
+        meetingUrl: CONSUMER_URL,
+      });
+      const identity = TEAMS_MEETINGS_PLATFORM_ADAPTER.urls.normalizeForReuse(CONSUMER_URL);
+      const result = runInNewContext(`(${source})()`, {
+        URL,
+        location: { href: CONSUMER_URL },
+        window: {
+          __openclawTeamsMeeting: { sessionId: owns ? "session-1" : "session-2", identity },
+        },
+        AudioContext: function AudioContext() {
+          throw new Error("capture admitted");
+        },
+      });
+      await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+    },
+  );
   it.each([
     ["teams-login-required", "login-required"],
     ["teams-admission-required", "admission-required"],
@@ -756,41 +780,72 @@ describe("Microsoft Teams meeting platform adapter", () => {
     ).toBe(false);
   });
 
-  it("reports verified routes only after the exact input marker and output sink agree", async () => {
-    const leave = control({ label: "Leave" });
-    const microphone = control({ label: "Turn microphone off", pressed: true });
-    const media = {
-      sinkId: "",
-      srcObject: liveMediaStream(),
-      async setSinkId(value: string) {
-        media.sinkId = value;
-      },
-    };
-    const { result } = await runStatusScript({
-      allowMicrophone: true,
-      devices: [
-        { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-        { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-      ],
-      leave,
-      media: [media],
-      microphone,
-      microphoneDevice: control({ label: "BlackHole 2ch" }),
-      priorMeeting: {
-        audioInputDeviceId: "blackhole-input",
-        identity: "teams-work:19:meeting_test@thread.v2",
-      },
-    });
+  it.each([
+    ["BlackHole 2ch", "BlackHole 2ch (Virtual)"],
+    ["OpenClaw Meeting Audio", "OpenClaw Meeting Audio"],
+  ])(
+    "reports verified %s routes only after the exact input marker and output sink agree",
+    async (deviceLabel, selectedInputLabel) => {
+      const leave = control({ label: "Leave" });
+      const microphone = control({ label: "Turn microphone off", pressed: true });
+      const media = {
+        sinkId: "",
+        srcObject: liveMediaStream(),
+        async setSinkId(value: string) {
+          media.sinkId = value;
+        },
+      };
+      const { result } = await runStatusScript({
+        allowMicrophone: true,
+        devices: [
+          { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
+          { deviceId: "virtual-output", kind: "audiooutput", label: deviceLabel },
+        ],
+        leave,
+        media: [media],
+        microphone,
+        microphoneDevice: control({ label: selectedInputLabel }),
+        priorMeeting: {
+          audioInputDeviceId: "virtual-input",
+          identity: "teams-work:19:meeting_test@thread.v2",
+        },
+      });
 
-    expect(result).toMatchObject({
-      audioInputRouted: true,
-      audioOutputRouted: true,
-      inCall: true,
-      micMuted: false,
-    });
-    expect(result.manualAction).toBeUndefined();
-    expect(media.sinkId).toBe("blackhole-output");
-  });
+      expect(result).toMatchObject({
+        audioInputRouted: true,
+        audioInputDeviceLabel: deviceLabel,
+        audioOutputRouted: true,
+        audioOutputDeviceLabel: deviceLabel,
+        inCall: true,
+        micMuted: false,
+      });
+      expect(result.manualAction).toBeUndefined();
+      expect(media.sinkId).toBe("virtual-output");
+    },
+  );
+
+  it.each(["OpenClaw Meeting Audio (Virtual)", "Monitor of OpenClaw Meeting Audio"])(
+    "rejects the non-contract virtual audio label %s",
+    async (deviceLabel) => {
+      const { result } = await runStatusScript({
+        allowMicrophone: true,
+        camera: control({ label: "Turn camera on", pressed: false }),
+        devices: [{ deviceId: "virtual-input", kind: "audioinput", label: deviceLabel }],
+        join: control({ label: "Join now" }),
+        microphone: control({ label: "Turn microphone on", pressed: false }),
+        microphoneDevice: control({ label: deviceLabel }),
+      });
+
+      expect(result).toMatchObject({
+        audioInputRouted: false,
+        manualAction: {
+          message:
+            "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.",
+          reason: "teams-audio-choice-required",
+        },
+      });
+    },
+  );
 
   it("reports the prepared session input during read-only status inspection", async () => {
     const media: PageMedia = { sinkId: "blackhole-output", async setSinkId() {} };

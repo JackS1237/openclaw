@@ -24,7 +24,7 @@ import {
 } from "./codex-route-model-slots.js";
 import type {
   CodexRouteHit,
-  DisabledCodexPluginRouteHit,
+  CodexRuntimeRouteHit,
   DisabledCodexPluginRouteIssue,
 } from "./codex-route-types.js";
 
@@ -92,7 +92,7 @@ function collectAgentModelRefs(params: {
     });
   }
   const mediaModels = asMutableRecord(agent.mediaModels);
-  for (const key of ["image", "video"] as const) {
+  for (const key of ["image", "video", "music"] as const) {
     collectModelConfigSlot({
       hits: params.hits,
       path: `${params.path}.mediaModels.${key}`,
@@ -216,15 +216,24 @@ export function collectConfigModelRefs(
 export function collectDisabledCodexPluginRouteHits(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): DisabledCodexPluginRouteHit[] {
+): CodexRuntimeRouteHit[] {
   if (!isCodexPluginUnavailableByConfig(cfg)) {
     return [];
   }
+  return collectCodexRuntimeRouteHits(cfg, env);
+}
+
+/** Find effective configured model routes that select the Codex runtime. */
+export function collectCodexRuntimeRouteHits(
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): CodexRuntimeRouteHit[] {
   const defaults = cfg.agents?.defaults;
   const defaultRefs = collectAgentRuntimeModelRefs({
     agent: defaults,
     path: "agents.defaults",
   });
+  let implicitDefaultRef: { path: string; modelRef: string } | undefined;
   if (
     cfg.agents &&
     !hasAgentPrimaryModelConfig(defaults) &&
@@ -234,10 +243,11 @@ export function collectDisabledCodexPluginRouteHits(
         resolveImplicitDefaultAgentModelRef(cfg),
     )
   ) {
-    defaultRefs.push({
+    implicitDefaultRef = {
       path: "agents.defaults.model",
       modelRef: resolveImplicitDefaultAgentModelRef(cfg),
-    });
+    };
+    defaultRefs.push(implicitDefaultRef);
   }
 
   const agents = listMutableCodexRouteAgentEntries(cfg);
@@ -273,14 +283,20 @@ export function collectDisabledCodexPluginRouteHits(
     for (const ref of collectAgentRuntimeModelRefs({
       agent: agentRecord,
       path,
-      fallbackModelRefs: inheritedDefaultModelRefs,
+      fallbackModelRefs: inheritedDefaultModelRefs.map((inheritedRef) =>
+        inheritedRef === implicitDefaultRef
+          ? Object.assign({}, inheritedRef, {
+              modelRef: resolveImplicitDefaultAgentModelRef(cfg, agentId),
+            })
+          : inheritedRef,
+      ),
       inheritedModelRefs,
     })) {
       candidateRefs.push({ ...ref, agentId });
     }
   }
 
-  const hits: DisabledCodexPluginRouteHit[] = [];
+  const hits: CodexRuntimeRouteHit[] = [];
   const seen = new Set<string>();
   for (const ref of candidateRefs) {
     const canonicalModel = resolveRuntimeModelRef({
@@ -303,7 +319,12 @@ export function collectDisabledCodexPluginRouteHits(
       continue;
     }
     seen.add(key);
-    hits.push({ path: ref.path, modelRef: ref.modelRef, canonicalModel });
+    hits.push({
+      path: ref.path,
+      modelRef: ref.modelRef,
+      canonicalModel,
+      ...(ref.agentId ? { agentId: ref.agentId } : {}),
+    });
   }
   return hits;
 }
@@ -324,7 +345,7 @@ export function collectDisabledCodexPluginRouteIssues(
 
 export function enableCodexPluginForRequiredRoutes(params: {
   cfg: OpenClawConfig;
-  routeHits: DisabledCodexPluginRouteHit[];
+  routeHits: CodexRuntimeRouteHit[];
 }): { cfg: OpenClawConfig; changes: string[] } {
   // Explicit user opt-out wins over managed-harness repair; doctor warns instead.
   if (params.routeHits.length === 0 || codexPluginRepairIsBlocked(params.cfg)) {

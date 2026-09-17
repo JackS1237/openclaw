@@ -17,7 +17,7 @@ import { LogService } from "./logger.js";
 import { isRepairableSecretStorageAccessError } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } from "./types.js";
 
-const normalizeOptionalString = normalizeNullableString;
+const normalizeNullableVerificationString = normalizeNullableString;
 
 export abstract class MatrixClientVerification extends MatrixClientCore {
   async getRoomKeyBackupStatus(): Promise<MatrixRoomKeyBackupStatus> {
@@ -137,7 +137,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
   }
 
   async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
-    const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
+    const recoveryKey = await this.recoveryKeyStore.getRecoveryKeySummary();
     const userId = this.client.getUserId() ?? this.selfUserId ?? null;
     const deviceId = this.client.getDeviceId()?.trim() || null;
     const diagnosticTimeoutMs = Math.min(this.localTimeoutMs, MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS);
@@ -218,7 +218,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
       return null;
     }
     const version = await crypto.getActiveSessionBackupVersion().catch(() => null);
-    return normalizeOptionalString(version);
+    return normalizeNullableVerificationString(version);
   }
 
   protected async resolveCachedRoomKeyBackupDecryptionKey(
@@ -275,7 +275,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     let matchesDecryptionKey: boolean | null = null;
     if (typeof crypto.getKeyBackupInfo === "function") {
       const info = await crypto.getKeyBackupInfo().catch(() => null);
-      serverVersion = normalizeOptionalString(info?.version) ?? serverVersion;
+      serverVersion = normalizeNullableVerificationString(info?.version) ?? serverVersion;
       if (info && typeof crypto.isKeyBackupTrusted === "function") {
         const trustInfo = await crypto.isKeyBackupTrusted(info).catch(() => null);
         trusted = typeof trustInfo?.trusted === "boolean" ? trustInfo.trusted : null;
@@ -304,7 +304,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
       const response = (await this.doRequest("GET", "/_matrix/client/v3/room_keys/version")) as {
         version?: string;
       };
-      return normalizeOptionalString(response.version);
+      return normalizeNullableVerificationString(response.version);
     } catch {
       return null;
     }

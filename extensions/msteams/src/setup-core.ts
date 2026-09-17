@@ -5,6 +5,7 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
+  patchTopLevelChannelConfigSection,
   setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
@@ -105,12 +106,12 @@ export function createMSTeamsSetupWizardBase(): Pick<
         await noteMSTeamsCredentialHelp(prompter);
       }
 
-      if (canUseEnv) {
-        const keepEnv = await prompter.confirm({
-          message: t("wizard.msteams.envPrompt"),
+      if (canUseEnv || hasConfigCreds) {
+        const keep = await prompter.confirm({
+          message: t(canUseEnv ? "wizard.msteams.envPrompt" : "wizard.msteams.credentialsKeep"),
           initialValue: true,
         });
-        if (keepEnv) {
+        if (keep) {
           next = msteamsSetupAdapter.applyAccountConfig({
             cfg: next,
             accountId: DEFAULT_ACCOUNT_ID,
@@ -119,32 +120,17 @@ export function createMSTeamsSetupWizardBase(): Pick<
         } else {
           ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
         }
-      } else if (hasConfigCreds) {
-        const keep = await prompter.confirm({
-          message: t("wizard.msteams.credentialsKeep"),
-          initialValue: true,
-        });
-        if (!keep) {
-          ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-        }
       } else {
         ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
       }
 
       if (appId && appPassword && tenantId) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              enabled: true,
-              appId,
-              appPassword,
-              tenantId,
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          enabled: true,
+          patch: { appId, appPassword, tenantId },
+        });
       }
 
       return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };

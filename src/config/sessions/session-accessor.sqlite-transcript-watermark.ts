@@ -7,21 +7,24 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
+  readSqliteTranscriptStoreBatches,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
-  type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 
 type WatermarkDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_windows" | "transcript_events" | "transcript_rewrite_watermarks"
+  | "session_windows"
+  | "transcript_events"
+  | "transcript_rewrite_watermarks"
+  | "session_transcript_cold_archives"
 >;
 
 export type SessionTranscriptWatermark = {
@@ -29,34 +32,54 @@ export type SessionTranscriptWatermark = {
   maxSeq: number | null;
 };
 
-const SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE = 400;
+/** Reads hot append and rewrite tokens together for transcript-derived caches. */
+export function readSessionTranscriptHotWatermark(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+): SessionTranscriptWatermark {
+  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectNoFrom((eb) => [
+      eb
+        .selectFrom("transcript_events")
+        .select((inner) => inner.fn.max<number>("seq").as("max_seq"))
+        .where("session_id", "=", sessionId)
+        .as("max_seq"),
+      eb
+        .selectFrom("transcript_rewrite_watermarks")
+        .select("generation")
+        .where("session_id", "=", sessionId)
+        .as("generation"),
+    ]),
+  );
+  return { generation: row?.generation ?? null, maxSeq: row?.max_seq ?? null };
+}
 
 /** Reads the append and rewrite tokens that validate transcript-derived caches. */
 export function readSessionTranscriptWatermark(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptWatermark {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", resolved.sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", resolved.sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      runSqliteDeferredTransactionSync(
+        database.db,
+        () => {
+          const watermark = readSessionTranscriptHotWatermark(database, resolved.sessionId);
+          const cold = readSessionColdTranscript(database.db, resolved.sessionId);
+          return { ...watermark, maxSeq: cold?.last_seq ?? watermark.maxSeq };
+        },
+        { databaseLabel: database.path, operationLabel: "session transcript watermark read" },
+      ),
+    toDatabaseOptions(resolved),
+    { throwOnMissingTable: true },
+  );
+  return result.found ? result.value : { generation: null, maxSeq: null };
 }
 
 function readSessionTranscriptWatermarkChunk(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: readonly string[],
 ): Map<string, SessionTranscriptWatermark> {
   const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
@@ -69,9 +92,11 @@ function readSessionTranscriptWatermarkChunk(
         "rewrite.session_id",
         "window.session_id",
       )
+      .leftJoin("session_transcript_cold_archives as cold", "cold.session_id", "window.session_id")
       .select((eb) => [
         "window.session_id",
         "rewrite.generation",
+        "cold.last_seq as cold_last_seq",
         eb
           .selectFrom("transcript_events as event")
           .select((inner) => inner.fn.max<number>("event.seq").as("max_seq"))
@@ -85,7 +110,7 @@ function readSessionTranscriptWatermarkChunk(
       row.session_id,
       {
         generation: row.generation ?? null,
-        maxSeq: row.max_seq ?? null,
+        maxSeq: row.cold_last_seq ?? row.max_seq ?? null,
       },
     ]),
   );
@@ -95,46 +120,7 @@ function readSessionTranscriptWatermarkChunk(
 export function readSessionTranscriptWatermarkBatch(
   scopes: readonly SessionTranscriptReadScope[],
 ): SessionTranscriptWatermark[] {
-  const results: Array<SessionTranscriptWatermark | undefined> = Array.from({
-    length: scopes.length,
-  });
-  const groups = new Map<
-    string,
-    { database: OpenClawAgentDatabase; items: Array<{ index: number; sessionId: string }> }
-  >();
-  const targetCache: SessionSqliteTargetResolutionCache = new Map();
-  for (const [index, scope] of scopes.entries()) {
-    const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const group = groups.get(database.path) ?? { database, items: [] };
-    group.items.push({ index, sessionId: resolved.sessionId });
-    groups.set(database.path, group);
-  }
-  for (const group of groups.values()) {
-    const sessionIds = [...new Set(group.items.map((item) => item.sessionId))];
-    const watermarks = new Map<string, SessionTranscriptWatermark>();
-    for (
-      let offset = 0;
-      offset < sessionIds.length;
-      offset += SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = sessionIds.slice(
-        offset,
-        offset + SESSION_TRANSCRIPT_WATERMARK_QUERY_CHUNK_SIZE,
-      );
-      for (const [sessionId, watermark] of readSessionTranscriptWatermarkChunk(
-        group.database,
-        chunk,
-      )) {
-        watermarks.set(sessionId, watermark);
-      }
-    }
-    for (const item of group.items) {
-      results[item.index] = watermarks.get(item.sessionId) ?? {
-        generation: null,
-        maxSeq: null,
-      };
-    }
-  }
-  return results.map((result) => result ?? { generation: null, maxSeq: null });
+  return readSqliteTranscriptStoreBatches(scopes, readSessionTranscriptWatermarkChunk).map(
+    (result) => result ?? { generation: null, maxSeq: null },
+  );
 }

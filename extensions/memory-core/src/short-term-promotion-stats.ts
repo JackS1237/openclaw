@@ -1,14 +1,14 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isSameMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "./dreaming-shared.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   emptyPhaseSignalStore,
   readPhaseSignalStore,
   readStore,
   resolvePhaseSignalPath,
   resolveStorePath,
-  withShortTermLock,
   writePhaseSignalStore,
 } from "./short-term-promotion-store.js";
 import type {
@@ -19,6 +19,7 @@ import type {
   ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
+  compareStoreTimestampDesc,
   isShortTermMemoryPath,
   normalizeMemoryPathForWorkspace,
   normalizeSnippet,
@@ -34,12 +35,9 @@ function compareDreamingStatsEntryByRecency(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+  if (byTime !== 0) {
+    return byTime;
   }
   if (b.totalSignalCount !== a.totalSignalCount) {
     return b.totalSignalCount - a.totalSignalCount;
@@ -64,12 +62,9 @@ function compareDreamingStatsEntryByPromotion(
   a: ShortTermDreamingStatsEntry,
   b: ShortTermDreamingStatsEntry,
 ): number {
-  const aMs = a.promotedAt ? Date.parse(a.promotedAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.promotedAt ? Date.parse(b.promotedAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const byTime = compareStoreTimestampDesc(a.promotedAt, b.promotedAt);
+  if (byTime !== 0) {
+    return byTime;
   }
   return compareDreamingStatsEntryBySignals(a, b);
 }
@@ -125,6 +120,7 @@ export async function loadShortTermPromotionDreamingStats(params: {
   let remPhaseHitCount = 0;
   let promotedTotal = 0;
   let promotedToday = 0;
+  let currentDay: string | undefined;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let latestPromotedAt: string | undefined;
   const activeKeys = new Set<string>();
@@ -171,11 +167,12 @@ export async function loadShortTermPromotionDreamingStats(params: {
     promotedTotal += 1;
     promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
     const promotedAtMs = Date.parse(entry.promotedAt);
-    if (
-      Number.isFinite(promotedAtMs) &&
-      isSameMemoryDreamingDay(promotedAtMs, params.nowMs, params.timezone)
-    ) {
-      promotedToday += 1;
+    if (Number.isFinite(promotedAtMs)) {
+      const promotedDay = formatMemoryDreamingDay(promotedAtMs, params.timezone);
+      currentDay ??= formatMemoryDreamingDay(params.nowMs, params.timezone);
+      if (promotedDay === currentDay) {
+        promotedToday += 1;
+      }
     }
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
       latestPromotedAtMs = promotedAtMs;
@@ -241,7 +238,7 @@ async function updatePhaseSignals(
   }
   const nowIso = resolveMemoryCoreTimestamp(resolveMemoryCoreNowMs(params.nowMs));
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),

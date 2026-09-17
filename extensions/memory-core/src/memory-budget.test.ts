@@ -1,8 +1,39 @@
 // Memory Core tests cover memory budget plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import {
+  compactMemoryForBudget,
+  DEFAULT_MEMORY_FILE_MAX_CHARS,
+  resolveMemoryPromotionFileMaxChars,
+} from "./memory-budget.js";
 
 const PROMOTION_MARKER_LINE = "<!-- openclaw-memory-promotion:memory/short-term.md#entry -->";
+
+describe("promotion file budget resolution", () => {
+  const cfg = {
+    agents: {
+      defaults: { bootstrapMaxChars: 9_500 },
+      list: [
+        { id: "alpha", bootstrapMaxChars: 12_000 },
+        { id: "beta", bootstrapMaxChars: 9_000 },
+      ],
+    },
+  } as OpenClawConfig;
+
+  it("uses the smallest bootstrap cap among agents sharing the workspace", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["alpha", "beta"] })).toBe(9_000);
+  });
+
+  it("retains the promotion writer ceiling when the agent cap is larger", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["alpha"] })).toBe(
+      DEFAULT_MEMORY_FILE_MAX_CHARS,
+    );
+  });
+
+  it("falls back to the configured default for an unlisted workspace owner", () => {
+    expect(resolveMemoryPromotionFileMaxChars({ cfg, agentIds: ["gamma"] })).toBe(9_500);
+  });
+});
 
 function promotionSection(date: string, sizeChars: number): string {
   const heading = `## Promoted From Short-Term Memory (${date})\n`;
@@ -114,6 +145,24 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).not.toContain("Promoted From Short-Term Memory");
   });
 
+  it("stops before compaction would exceed the prior-entry loss limit", () => {
+    const existing = [
+      promotionSection("2026-04-10", 500),
+      promotionSection("2026-04-15", 500),
+      promotionSection("2026-04-20", 500),
+      promotionSection("2026-04-25", 500),
+    ].join("\n");
+    const result = compactMemoryForBudget({
+      existingMemory: existing,
+      newSection: `\n${promotionSection("2026-04-29", 500)}`,
+      budgetChars: 1_400,
+      maxPriorEntryLossFraction: 0.25,
+    });
+
+    expect(result.droppedDates).toEqual(["2026-04-10"]);
+    expect(result.compacted).toContain("(2026-04-15)");
+  });
+
   it("returns existing unchanged when the file has no promotion sections (cannot compact)", () => {
     const existing = "# Long-Term Memory\n\nLots of user content here.\n".repeat(50);
     const newSection = `\n${promotionSection("2026-04-29", 200)}`;
@@ -148,10 +197,35 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.droppedDates).toEqual([]);
   });
 
-  it("preserves a non-promotion ## heading sandwiched between promotion sections", () => {
+  it.each([
+    {
+      title: "preserves a non-promotion ## heading sandwiched between promotion sections",
+      userSection: "## My Reflections\nMy own notes.\n\n",
+      heading: "## My Reflections",
+      content: "My own notes.",
+    },
+    {
+      title: "preserves a user-authored `### Global` heading written under a promotion section",
+      userSection: "### Global\n\nMy own global rule, not a promoted entry.\n\n",
+      heading: "### Global",
+      content: "My own global rule, not a promoted entry.",
+    },
+    {
+      title: "preserves a user-authored `### Project:` heading written under a promotion section",
+      userSection: "### Project: alpha\n\nAlpha ships on Fridays.\n\n",
+      heading: "### Project: alpha",
+      content: "Alpha ships on Fridays.",
+    },
+    {
+      title: "preserves a tab-delimited user heading written under a promotion section",
+      userSection: "###\tCorrection\nThe prod DB is db-2.corp.example, NOT db-1.\n\n",
+      heading: "###\tCorrection",
+      content: "The prod DB is db-2.corp.example, NOT db-1.",
+    },
+  ])("$title", ({ userSection, heading, content }) => {
     const existing =
       `${promotionSection("2026-04-10", 400)}\n` +
-      "## My Reflections\nMy own notes.\n\n" +
+      userSection +
       promotionSection("2026-04-20", 400);
     const newSection = `\n${promotionSection("2026-04-29", 400)}`;
     const result = compactMemoryForBudget({
@@ -160,8 +234,8 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
       budgetChars: 900,
     });
     expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("## My Reflections");
-    expect(result.compacted).toContain("My own notes.");
+    expect(result.compacted).toContain(heading);
+    expect(result.compacted).toContain(content);
   });
 
   it("does not prepend a spurious leading newline when input starts with a ## heading", () => {
@@ -261,54 +335,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).not.toContain("### Project: alpha");
     expect(result.compacted).not.toContain("### Global");
     expect(result.compacted).not.toContain("openclaw-memory-promotion");
-  });
-
-  it("preserves a user-authored `### Global` heading written under a promotion section", () => {
-    const existing =
-      `${promotionSection("2026-04-10", 400)}\n` +
-      "### Global\n\nMy own global rule, not a promoted entry.\n\n" +
-      promotionSection("2026-04-20", 400);
-    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
-    const result = compactMemoryForBudget({
-      existingMemory: existing,
-      newSection,
-      budgetChars: 900,
-    });
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("### Global");
-    expect(result.compacted).toContain("My own global rule, not a promoted entry.");
-  });
-
-  it("preserves a user-authored `### Project:` heading written under a promotion section", () => {
-    const existing =
-      `${promotionSection("2026-04-10", 400)}\n` +
-      "### Project: alpha\n\nAlpha ships on Fridays.\n\n" +
-      promotionSection("2026-04-20", 400);
-    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
-    const result = compactMemoryForBudget({
-      existingMemory: existing,
-      newSection,
-      budgetChars: 900,
-    });
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("### Project: alpha");
-    expect(result.compacted).toContain("Alpha ships on Fridays.");
-  });
-
-  it("preserves a tab-delimited user heading written under a promotion section", () => {
-    const existing =
-      `${promotionSection("2026-04-10", 400)}\n` +
-      "###\tCorrection\nThe prod DB is db-2.corp.example, NOT db-1.\n\n" +
-      promotionSection("2026-04-20", 400);
-    const newSection = `\n${promotionSection("2026-04-29", 400)}`;
-    const result = compactMemoryForBudget({
-      existingMemory: existing,
-      newSection,
-      budgetChars: 900,
-    });
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("###\tCorrection");
-    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
   });
 
   it("preserves an empty user heading line written under a promotion section", () => {

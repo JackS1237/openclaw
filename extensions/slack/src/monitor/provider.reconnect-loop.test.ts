@@ -1,13 +1,14 @@
 // Slack tests cover provider reconnect loop behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { getSlackClient, getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
 
 describe("slack socket reconnect loop", () => {
-  beforeEach(() => {
-    resetSlackTestState();
+  beforeEach(async () => {
+    await resetSlackTestState();
     // Reconnect backoff uses timeouts. Keep ingress polling and SQLite WAL intervals
     // real so runAllTimersAsync cannot turn periodic maintenance into an infinite loop.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -165,11 +166,7 @@ describe("slack socket reconnect loop", () => {
       appToken: "app",
       abortSignal: controller.signal,
       config: slackTestState.config,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
+      runtime: createRuntimeSpies(),
       setStatus,
     });
 
@@ -179,6 +176,7 @@ describe("slack socket reconnect loop", () => {
     await Promise.resolve();
 
     expect(setStatus).toHaveBeenCalledWith({
+      running: true,
       connected: true,
       lastConnectedAt: expect.any(Number),
       terminalDisconnect: undefined,
