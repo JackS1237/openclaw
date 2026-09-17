@@ -230,7 +230,9 @@ it("closes a completed oneshot without mixing its replacement record identity", 
           mode: "prompt",
           requestId: "oneshot-record",
           onEvent(event) {
-            if (event.type === "text_delta") chunks.push(event.text);
+            if (event.type === "text_delta") {
+              chunks.push(event.text);
+            }
           },
         });
       } finally {
