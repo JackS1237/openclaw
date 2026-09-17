@@ -22,10 +22,9 @@ const RESET_CLEANUP_DEADLINE_MS = 15_000;
 const RESET_REQUEST_TIMEOUT_MS = 75_000;
 const EVENT_WAIT_TIMEOUT_MS = 30_000;
 const CONTROL_SESSION_KEY = "main";
-const PROOF_CHANNEL = "telegram";
+const PROOF_CHANNEL = "webchat";
 const PROOF_ACCOUNT_ID = "default";
-const PROOF_CONVERSATION_ID = "1000000001";
-const PROOF_TELEGRAM_TOKEN = "123456:proof-only-not-a-real-token";
+const PROOF_CONVERSATION_ID = CONTROL_SESSION_KEY;
 const PROOF_ACP_AGENT = "main";
 
 type AdapterEvent = {
@@ -607,13 +606,6 @@ async function runScenario(params: {
       consoleStyle: "json",
       file: rawGatewayLog,
     },
-    channels: {
-      telegram: {
-        enabled: true,
-        botToken: PROOF_TELEGRAM_TOKEN,
-        threadBindings: { enabled: true, spawnSessions: true },
-      },
-    },
     acp: {
       enabled: true,
       backend: "acpx",
@@ -623,7 +615,7 @@ async function runScenario(params: {
     },
     plugins: {
       enabled: true,
-      allow: ["acpx", "telegram"],
+      allow: ["acpx"],
       entries: {
         acpx: {
           enabled: true,
@@ -640,7 +632,6 @@ async function runScenario(params: {
             },
           },
         },
-        telegram: { enabled: true },
       },
     },
   });
@@ -1065,7 +1056,6 @@ async function runScenario(params: {
     await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
     const replacements: Array<[string, string]> = [
       [gatewayToken, "<gateway-token>"],
-      [PROOF_TELEGRAM_TOKEN, "<proof-telegram-token>"],
       [params.repoRoot, "<repo-root>"],
       [params.runtimeRoot, "<built-runtime>"],
       [state.home, "<isolated-home>"],
@@ -1183,7 +1173,7 @@ async function main(): Promise<void> {
       gateway: "isolated child process spawned from a temporary copy of the built dist runtime",
       acpRegistration: "bundled acpx plugin service with a configured proof agent command",
       binding:
-        "dynamic /acp spawn main --bind here binding for a synthetic Telegram DM with channel network startup disabled",
+        "dynamic /acp spawn main --bind here binding for the built-in WebChat conversation with channel network startup disabled",
       isolatedState: true,
       productionCleanupDeadlineMs: RESET_CLEANUP_DEADLINE_MS,
     },
