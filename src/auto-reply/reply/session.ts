@@ -613,8 +613,9 @@ async function initSessionStateAttemptLocked(
     ctx: sessionCtxForState,
     bindingContext: conversationBindingContext,
   });
+  // Escaped commands initialize under the transport session, but the bound
+  // handler owns the reset. Do not rotate or drain that unrelated source first.
   const shouldDeferResetToBoundAcpCommand =
-    isAcpSessionKey(sessionKey) &&
     Boolean(boundAcpSessionForCommandReset) &&
     resetCommand.matchedResetTriggerLower !== undefined &&
     DEFAULT_RESET_TRIGGERS.some(

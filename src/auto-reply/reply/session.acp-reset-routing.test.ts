@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { testing as sessionBindingTesting } from "../../infra/outbound/session-binding-service.js";
+import {
+  getSessionBindingService,
+  testing as sessionBindingTesting,
+} from "../../infra/outbound/session-binding-service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   initSessionState,
@@ -23,6 +26,42 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 describe("bound ACP reset routing", () => {
+  it.each(["/new", "/reset", "/new continue", "/reset continue"])(
+    "keeps the transport session unchanged before handling dynamically bound %s",
+    async (body) => {
+      const storePath = await createStorePath("openclaw-transport-acp-reset-");
+      const sourceKey = "agent:main:main";
+      const boundKey = "agent:main:acp:bound-reset";
+      await writeSessionStoreFast(storePath, {
+        [sourceKey]: { sessionId: "source-session", updatedAt: Date.now(), systemSent: true },
+        [boundKey]: { sessionId: "bound-session", updatedAt: Date.now(), systemSent: true },
+      });
+      await getSessionBindingService().bind({
+        targetSessionKey: boundKey,
+        targetKind: "session",
+        conversation: { channel: "webchat", accountId: "default", conversationId: "main" },
+        placement: "current",
+      });
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          CommandBody: body,
+          CommandSource: "text",
+          CommandAuthorized: true,
+          Provider: "webchat",
+          Surface: "webchat",
+          From: "main",
+          To: "main",
+          SessionKey: "main",
+        },
+        cfg: { session: { store: storePath } },
+      });
+      expect(result.sessionKey).toBe(sourceKey);
+      expect(result.sessionId).toBe("source-session");
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(false);
+    },
+  );
   it.each([
     {
       name: "defers /new lifecycle rotation to the bound ACP reset handler",
