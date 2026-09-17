@@ -87,16 +87,15 @@ it.skipIf(process.platform === "win32").each([false, true])(
           // A stopped ACPX record can retain its physical lease without its PID.
           await store.save({ ...oldRecord, pid: undefined });
         }
-        const close = BaseAcpxRuntime.prototype.close;
-        vi.spyOn(BaseAcpxRuntime.prototype, "close").mockImplementation(
-          async function (this: BaseAcpxRuntime, input) {
-            if (input.handle.backendSessionId === first.backendSessionId) {
-              started.resolve();
-              await release.promise;
-            }
-            return await close.call(this, input);
-          },
-        );
+        const close = vi.spyOn(BaseAcpxRuntime.prototype, "close");
+        close.mockImplementation(async function (this: BaseAcpxRuntime, input) {
+          if (input.handle.backendSessionId === first.backendSessionId) {
+            started.resolve();
+            await release.promise;
+          }
+          close.mockRestore();
+          return await BaseAcpxRuntime.prototype.close.call(this, input);
+        });
         closing = runtime.close({ handle: first, reason: "reset", discardPersistentState: true });
         void closing.catch(() => {});
         await started.promise;
