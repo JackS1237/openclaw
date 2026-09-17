@@ -218,13 +218,20 @@ export async function ensureManagerRuntimeHandle(params: {
     ...runtimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
+  const ensuredIdentity = createIdentityFromEnsure({ handle: ensured, now });
+  // A new physical record cannot inherit resolved IDs from the previous record.
+  // In particular, a completed oneshot may be re-ensured for cleanup or status.
+  if (
+    identityForEnsure?.acpxRecordId &&
+    ensuredIdentity?.acpxRecordId &&
+    identityForEnsure.acpxRecordId !== ensuredIdentity.acpxRecordId
+  ) {
+    identityForEnsure = undefined;
+  }
   const nextIdentity =
     mergeSessionIdentity({
       current: identityForEnsure,
-      incoming: createIdentityFromEnsure({
-        handle: ensured,
-        now,
-      }),
+      incoming: ensuredIdentity,
       now,
     }) ?? identityForEnsure;
   const nextHandleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
