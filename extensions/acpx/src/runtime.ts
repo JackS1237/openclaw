@@ -36,7 +36,7 @@ import {
   type AcpRuntimeErrorCode,
 } from "../runtime-api.js";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
-import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
   ACPX_PROBE_LEASE_SESSION_KEY,
   hashAcpxProcessCommand,
@@ -46,11 +46,11 @@ import {
 } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
-  cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
+import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
   type AcpSessionStore,
@@ -63,15 +63,11 @@ import {
   acpxGenerationKey,
   type GenerationHandle,
   acpxOperationScope,
-  readSessionRecordName,
   readRecordAgentCommand,
   readRecordCwd,
   readRecordResetOnNextEnsure,
-  readRecordAgentPid,
   readOpenClawLeaseIdFromRecord,
-  readOpenClawGatewayInstanceIdFromRecord,
   extractGeneratedWrapperPath,
-  selectCurrentSessionLease,
   createResetAwareSessionStore,
 } from "./runtime-session-store.js";
 import {
@@ -956,85 +952,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
   }
 
-  private async cleanupProcessTreeForRecord(
-    handle: OpenClawRuntimeHandle,
-    record: AcpLoadedSessionRecord,
-  ): Promise<void> {
-    const leaseId = readOpenClawLeaseIdFromRecord(record);
-    const rootPid = readRecordAgentPid(record);
-    const sessionKeys = [resolveAcpxSessionResource(handle), readSessionRecordName(record)];
-    const openLeases =
-      this.gatewayInstanceId && this.processLeaseStore
-        ? await this.processLeaseStore.listOpen(this.gatewayInstanceId)
-        : [];
-    const selectedLease = selectCurrentSessionLease({
-      leases: openLeases,
-      sessionKeys,
-      rootPid,
-    });
-    const loadedLease = leaseId ? await this.processLeaseStore?.load(leaseId) : undefined;
-    const lease =
-      selectedLease ??
-      (loadedLease &&
-      loadedLease.gatewayInstanceId === this.gatewayInstanceId &&
-      (!rootPid || loadedLease.rootPid === rootPid) &&
-      sessionKeys.includes(loadedLease.sessionKey)
-        ? loadedLease
-        : undefined);
-    if (lease && lease.gatewayInstanceId === this.gatewayInstanceId) {
-      await this.processLeaseStore?.markState(lease.leaseId, "closing");
-      const result =
-        lease.rootPid > 0
-          ? await cleanupOpenClawOwnedAcpxProcessTree({
-              rootPid: lease.rootPid,
-              rootCommand: record?.agentCommand,
-              expectedLeaseId: lease.leaseId,
-              expectedGatewayInstanceId: lease.gatewayInstanceId,
-              wrapperRoot: lease.wrapperRoot,
-              deps: this.processCleanupDeps,
-            })
-          : await cleanupOpenClawOwnedAcpxPendingLease({
-              leaseId: lease.leaseId,
-              gatewayInstanceId: lease.gatewayInstanceId,
-              wrapperRoot: lease.wrapperRoot,
-              wrapperPath: lease.wrapperPath,
-              deps: this.processCleanupDeps,
-            });
-      await this.processLeaseStore?.markState(
-        lease.leaseId,
-        result.skippedReason === "process-list-unavailable" ||
-          result.skippedReason === "unsupported-platform" ||
-          (lease.rootPid <= 0 &&
-            (result.skippedReason === "ambiguous-root" ||
-              result.skippedReason === "unverified-root"))
-          ? "open"
-          : result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
-            ? "closed"
-            : "lost",
-      );
-      return;
-    }
-
-    const rootCommand =
-      readRecordAgentCommand(record) ??
-      resolveAgentCommand({
-        agentName: readAgentFromHandle(handle),
-        agentRegistry: this.agentRegistry,
-      });
-    if (!rootPid || !rootCommand) {
-      return;
-    }
-    const expectedGatewayInstanceId = readOpenClawGatewayInstanceIdFromRecord(record);
-    await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid,
-      rootCommand: renderAgentCommand(rootCommand),
-      ...(leaseId ? { expectedLeaseId: leaseId } : {}),
-      ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
-      wrapperRoot: this.wrapperRoot,
-      deps: this.processCleanupDeps,
-    });
-  }
-
   async shutdown(): Promise<void> {
     await this.generationRegistry.shutdown();
   }
@@ -1440,10 +1357,23 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           this.generationRegistry.retireGeneration(generation);
           this.legacyBareSessionKeys.delete(generation.resource);
         }
+        // Freeze physical cleanup ownership before close can yield or mutate its
+        // record. Preparation failures must not prevent the backend close attempt.
+        const cleanup = await prepareAcpxProcessCleanup({
+          record: snapshot.record,
+          command: snapshot.command,
+          sessionKey: resolveAcpxSessionResource(input.handle),
+          gatewayInstanceId: this.gatewayInstanceId,
+          wrapperRoot: this.wrapperRoot,
+          leaseStore: this.processLeaseStore,
+          deps: this.processCleanupDeps,
+        }).catch((error: unknown) => async () => {
+          throw error;
+        });
         try {
           await delegate.close(toAcpxResourceInput(input));
         } finally {
-          await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
+          await cleanup();
         }
         // Oneshot sessions can share the logical key without sharing physical
         // records. Closing one handle cannot retire another record's live lane.
