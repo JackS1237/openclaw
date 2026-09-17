@@ -2783,7 +2783,9 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionKey).toBe(sourceSessionKey);
     expect(result.sessionId).toBe(sourceSessionId);
     if ("reset" in scenario) {
-      expect(result.resetTriggered).toBe(true);
+      // The bound ACP handler owns reset; preprocessing must not rotate its transport session.
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(false);
     }
     expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
     expect(
