@@ -1,6 +1,7 @@
 // ACP cleanup deadlines and fresh metadata preparation for Gateway reset/delete.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { getAcpSessionResetControls } from "../acp/control-plane/manager.reset-controls.js";
 import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-owner.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
@@ -68,7 +69,8 @@ export async function closeAcpRuntimeForSession(params: {
     return undefined;
   }
   params.assertCurrent?.();
-  const ownership = acpManager.captureSessionRuntimeOwnership({
+  const resetControls = getAcpSessionResetControls(acpManager);
+  const ownership = resetControls.captureSessionRuntimeOwnership({
     cfg: params.cfg,
     sessionKey: acpSessionKey,
     agentId: params.agentId,
@@ -89,7 +91,7 @@ export async function closeAcpRuntimeForSession(params: {
     }
     params.assertCurrent?.();
     if (cancelOutcome.status === "timeout") {
-      await acpManager.forceDiscardSessionRuntime({
+      await resetControls.forceDiscardSessionRuntime({
         cfg: params.cfg,
         sessionKey: acpSessionKey,
         agentId: params.agentId,
@@ -132,7 +134,7 @@ export async function closeAcpRuntimeForSession(params: {
     }
     params.assertCurrent?.();
     if (closeOutcome.status === "timeout") {
-      await acpManager.forceDiscardSessionRuntime({
+      await resetControls.forceDiscardSessionRuntime({
         cfg: params.cfg,
         sessionKey: acpSessionKey,
         agentId: params.agentId,

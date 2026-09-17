@@ -1,6 +1,7 @@
-/** Tests that reset actor rotation fences every ACP metadata-writing operation. */
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+/** Tests that reset actor rotation fences every ACP metadata-writing operation. */
+import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -146,7 +147,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
                 });
       await staleOperationEntered.promise;
 
-      await manager.forceDiscardSessionRuntime({
+      await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
         cfg: baseCfg,
         sessionKey,
         reason: "session-reset",
@@ -272,7 +273,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
     });
     await staleStatusEntered.promise;
 
-    await manager.forceDiscardSessionRuntime({
+    await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
       cfg: baseCfg,
       sessionKey,
       reason: "session-reset",
@@ -300,8 +301,8 @@ describe("AcpSessionManager actor epoch fencing", () => {
     const manager = new AcpSessionManager();
     const input = { cfg: baseCfg, sessionKey, agent: "codex", mode: "persistent" as const };
     await manager.initializeSession(input);
-    const old = manager.captureSessionRuntimeOwnership(input);
-    await manager.forceDiscardSessionRuntime({
+    const old = getAcpSessionResetControls(manager).captureSessionRuntimeOwnership(input);
+    await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
       ...input,
       reason: "reset",
       isCurrent: old.isCurrent,
@@ -309,7 +310,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
     const fresh = await manager.initializeSession(input);
     const closesBefore = state.close.mock.calls.length;
     await expect(
-      manager.forceDiscardSessionRuntime({
+      getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
         ...input,
         reason: "late reset",
         isCurrent: old.isCurrent,

@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, expect, vi } from "vitest";
+import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
@@ -174,6 +175,7 @@ const acpManagerMocks = vi.hoisted(() => ({
   closeSession: vi.fn(async () => {}),
   forceDiscardSessionRuntime: vi.fn(async () => {}),
 }));
+registerAcpSessionResetControls(acpManagerMocks, acpManagerMocks);
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));

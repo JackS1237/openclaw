@@ -21,6 +21,7 @@ import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
 import { registerAcpSessionManagerDisposer } from "./manager.lifecycle.js";
+import { registerAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
   createSupersededActorError,
@@ -87,6 +88,15 @@ export class AcpSessionManager {
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
     this.deps = deps;
+    registerAcpSessionResetControls(this, {
+      captureSessionRuntimeOwnership: (params) => {
+        const ownership = this.actorQueue.capture(
+          acpSessionActorKey(resolveAcpSessionTarget(params)),
+        );
+        return { isCurrent: ownership.isCurrent, release: ownership.release };
+      },
+      forceDiscardSessionRuntime: (params) => this.#forceDiscardSessionRuntime(params),
+    });
     registerAcpSessionManagerDisposer(this, async (reason) => {
       this.stopping = true;
       const acceptedTurns: AcceptedTurnState[] = [];
@@ -373,17 +383,8 @@ export class AcpSessionManager {
     });
   }
 
-  /** Captures the exact actor generation before reset cleanup can yield. */
-  captureSessionRuntimeOwnership(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    agentId?: string;
-  }) {
-    return this.actorQueue.capture(acpSessionActorKey(resolveAcpSessionTarget(params)));
-  }
-
   /** Evicts only the captured runtime generation; old handles close in the background. */
-  async forceDiscardSessionRuntime(params: {
+  async #forceDiscardSessionRuntime(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId?: string;

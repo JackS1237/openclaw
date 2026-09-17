@@ -1,6 +1,7 @@
-/** Tests ACP manager session initialization and persisted runtime options. */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+/** Tests ACP manager session initialization and persisted runtime options. */
+import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -230,7 +231,7 @@ describe("AcpSessionManager initializeSession", () => {
       expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     });
 
-    await manager.forceDiscardSessionRuntime({
+    await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
       cfg: baseCfg,
       sessionKey,
       reason: "session-reset",

@@ -7,7 +7,7 @@ import {
   recordSubagentTerminalState,
 } from "../../sessions/session-state-events.js";
 import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "../runtime/errors.js";
-import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
+import { markAcpTurnActive } from "./active-turns.js";
 import type { AcceptedTurnState } from "./manager.accepted-turns.js";
 import {
   isFailoverWorthyBackendError,
@@ -171,14 +171,9 @@ export async function runManagerTurn(params: {
     throw errorToRecord;
   };
 
-  let acpTurnMarkedActive = false;
-  // Liveness spans the whole task, not one attempt: mark once before the backend loop
-  // (after the ready-meta check, so a pre-loop throw cannot leak it) and clear on every
-  // runTurn exit, including unexpected retry/cleanup failures before terminal task writes.
-  if (taskContext) {
-    markAcpTurnActive(params);
-    acpTurnMarkedActive = true;
-  }
+  // Liveness spans the whole task, not one backend attempt. The release belongs to
+  // this turn so a retired actor cannot erase a successor after reset overlap.
+  const releaseActiveTurn = taskContext ? markAcpTurnActive(params) : undefined;
 
   try {
     for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
@@ -550,8 +545,6 @@ export async function runManagerTurn(params: {
       }
     }
   } finally {
-    if (acpTurnMarkedActive) {
-      clearAcpTurnActive(params);
-    }
+    releaseActiveTurn?.();
   }
 }
