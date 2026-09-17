@@ -4,6 +4,26 @@ import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 
 describe("control reply display projection", () => {
+  it.each(["REPLY_SKIP\n\nRE", "reply_skip\n\nre", "ANNOUNCE_SKIP\nREPLY_SKIP"])(
+    "hides repeated control output %s after an interrupted or completed stream",
+    (text) => {
+      expect(
+        projectLiveAssistantBufferedText(text, { suppressLeadFragments: false }),
+      ).toMatchObject({
+        text: "",
+        suppress: true,
+      });
+      expect(projectChatDisplayMessages([{ role: "assistant", content: text }])).toEqual([]);
+    },
+  );
+
+  it.each(["REPLY_SKIP means the peer exchange is over.", "The literal marker is `REPLY_SKIP`."])(
+    "keeps substantive prose mentioning controls: %s",
+    (text) => {
+      expect(projectLiveAssistantBufferedText(text)).toMatchObject({ text, suppress: false });
+    },
+  );
+
   it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "holds every partial %s after separate control replies without losing ordinary final text",
     (token) => {

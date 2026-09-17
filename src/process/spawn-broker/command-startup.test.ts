@@ -6,7 +6,9 @@ import { runCommandWithTimeout, runExec } from "../exec.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("command startup cancellation", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
   it.each([false, true])(
     "keeps one runExec deadline across admission and execution (cooperative exit: %s)",
     async (cooperative) => {

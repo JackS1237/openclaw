@@ -17,7 +17,6 @@ import {
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
-import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import {
@@ -43,6 +42,7 @@ import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts"
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const legacyFinalizerBuildSources = [
+  "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   "src/cli/update-cli/update-command-legacy-finalize.test-support.ts",
   "src/infra/update-migrated-finalize.worker.ts",
   "src/infra/runtime-process-entrypoints.ts",
@@ -59,6 +59,8 @@ export const legacyFinalizerBuildSources = [
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
   ...runtimeProcessBuildEntries,
+  "legacy-config-binding-repair.runtime":
+    "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...Object.fromEntries(
     [
       agentWorkerStoreFixtureEntrypoint,
@@ -79,7 +81,6 @@ export const vitestWorkerBuildEntries = {
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),
-      sessionListCacheRetentionEntrypoint,
       sessionChildCacheRetentionEntrypoint,
       nodeHostConfigRuntimeEntrypoint,
       channelIngressGatewayRestartEntrypoint,

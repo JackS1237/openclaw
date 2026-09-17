@@ -8,12 +8,22 @@ const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   "REPLY_SKIP",
 ] as const;
 
+const CONTROL_REPLY_SEQUENCE_PREFIX = new RegExp(
+  `^(?:(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")})\\s+)+([A-Z_]+)$`,
+  "i",
+);
+
 /**
- * Return true when a chat-visible reply is exactly an internal control token.
+ * Recognize control-only replies, including a repeated marker's unfinished tail.
  */
 export function isSuppressedControlReplyText(text: string): boolean {
   const normalized = text.trim();
-  return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
+  const repeatedFragment = CONTROL_REPLY_SEQUENCE_PREFIX.exec(normalized)?.[1]?.toUpperCase();
+  return SUPPRESSED_CONTROL_REPLY_TOKENS.some(
+    (token) =>
+      isSilentReplyText(normalized, token) ||
+      (repeatedFragment !== undefined && token.startsWith(repeatedFragment)),
+  );
 }
 
 /** Remove internal control tokens when a model appends one to visible reply text. */

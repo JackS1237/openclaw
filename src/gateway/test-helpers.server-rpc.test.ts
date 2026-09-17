@@ -7,7 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { type AgentsConfig, getRuntimeConfig as getMockedRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
@@ -20,6 +20,7 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 let ws: WebSocket;
@@ -28,6 +29,35 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("Gateway RPC fixture session writes", () => {
+  test("fixture release joins admitted continuations before deselecting their store", async () => {
+    // openclaw-temp-dir: allow verifies explicit store teardown while a writer owns the directory
+    const dir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-admitted-writes-")),
+    );
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    testState.sessionStorePath = storePath;
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    await writeSessionStore({ entries: { main: { sessionId: "admitted-write", updatedAt: 1 } } });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [scope.sessionKey, "admitted-write"],
+      assertAllowed: () => {},
+    });
+    const releasing = releaseGatewaySessionStoreFixture(dir);
+    try {
+      expect(testState.sessionStorePath).toBe(storePath);
+      await admission.run(() => updateSessionEntry(scope, () => ({ label: "late continuation" })));
+      expect(loadSessionEntry(scope)?.label).toBe("late continuation");
+    } finally {
+      admission.release();
+      await releasing;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+    expect(
+      listOpenClawAgentDatabasesForTest().some((database) => database.path === storePath),
+    ).toBe(false);
+  });
+
   test.each(["raw WebSocket", "rpcReq"])("%s preserves queued session writes", async (request) => {
     const dir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-rpc-writes-")),
@@ -74,8 +104,7 @@ describe("Gateway RPC fixture session writes", () => {
       release.resolve();
       await Promise.allSettled([...writes, ...drains]);
       // This custom store lives outside the Gateway HOME and owns its own disposal.
-      disposeOpenClawAgentDatabaseByPath(storePath);
-      testState.sessionStorePath = undefined;
+      await releaseGatewaySessionStoreFixture(dir);
       await fs.rm(dir, { recursive: true, force: true });
     }
     expect(

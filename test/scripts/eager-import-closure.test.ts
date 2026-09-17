@@ -60,7 +60,7 @@ it.each([
   expect(result.status, result.stderr).toBe(loadsModule ? 1 : 0);
   const input = relative(process.cwd(), entry).replaceAll("\\", "/");
   if (loadsModule) {
-    expect(result.stderr).toContain("ERR_MODULE_NOT_FOUND");
+    expect(result.stderr).toContain("Cannot find module");
     expect(() => collectEagerRuntimeImportClosure([input])).toThrow("unresolved ./missing.mts");
   } else {
     expect(result.stdout.trim()).toBe("entry executed");

@@ -1914,6 +1914,9 @@ importers:
       '@openclaw/matrix':
         specifier: workspace:*
         version: link:../matrix
+      '@openclaw/mattermost':
+        specifier: workspace:*
+        version: link:../mattermost
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

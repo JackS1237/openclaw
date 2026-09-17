@@ -17,6 +17,7 @@
   "devDependencies": {
     "@openclaw/crabbox-provider": "workspace:*",
     "@openclaw/discord": "workspace:*",
+    "@openclaw/mattermost": "workspace:*",
     "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",

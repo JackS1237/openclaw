@@ -7,7 +7,9 @@ import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("Gateway spawn transport initialization", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () => {
   it.each(["exit", "timeout"] as const)(
     "logs first-start %s and keeps subsequent Gateway starts in-process",
     async (failure) => {

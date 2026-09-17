@@ -7572,7 +7572,7 @@ setImmediate(() => {
     );
     expect(resolve.if).toBe("inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'");
     expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
-    expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v3");
+    expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v4");
     expect(resolve.run).toContain("${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}");
     expect(resolve.run).toContain("node-$(node --version)-${deps_input_fingerprint:?}");
     expect(resolve.run).not.toMatch(/GITHUB_(?:REF|SHA|RUN_ID)|RUN_(?:ID|ATTEMPT)/u);
@@ -7869,6 +7869,8 @@ setImmediate(() => {
     mkdirSync(path.join(workspace, "node_modules"));
     writeFileSync(path.join(workspace, "node_modules", "before"), "");
     writeFileSync(path.join(store, "before"), "");
+    mkdirSync(path.join(store, "toolchain"));
+    writeFileSync(path.join(store, "toolchain", "pnpm.tgz"), "authenticated archive");
     symlinkSync(testNodeExecPath, path.join(bin, "node"));
     const pnpm = path.join(bin, "pnpm");
     writeFileSync(
@@ -7958,6 +7960,9 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
     );
     expect(existsSync(path.join(workspace, "node_modules", "before"))).toBe(modes.length < 2);
     expect(existsSync(path.join(store, "before"))).toBe(modes.length < 3);
+    expect(readFileSync(path.join(store, "toolchain", "pnpm.tgz"), "utf8")).toBe(
+      "authenticated archive",
+    );
     expect(existsSync(githubEnv)).toBe(cache && status === 0);
     if (cache && status === 0) {
       expect(readFileSync(githubEnv, "utf8")).toBe(

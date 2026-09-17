@@ -767,7 +767,7 @@ export function createChangedNodeTestShards(
     .map(({ target }) => target);
 
   const shards = [
-    ...canonicalShards.map((shard) => ({ ...shard, configs: [] })),
+    ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
     ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(

@@ -4,7 +4,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import type { SpawnBrokerHost } from "./host.js";
 
-const context = new AsyncLocalStorage<SpawnBrokerHost>();
+const context = new AsyncLocalStorage<SpawnBrokerHost | undefined>();
 let gatewayStartupDisabled = false;
 
 /** A failed startup optimization stays disabled across Gateway restarts in this process. */
@@ -41,7 +41,7 @@ export async function startGatewaySpawnBroker(options: {
   }
 }
 
-export function runWithSpawnBroker<T>(host: SpawnBrokerHost, run: () => T): T {
+export function runWithSpawnBroker<T>(host: SpawnBrokerHost | undefined, run: () => T): T {
   return context.run(host, run);
 }
 

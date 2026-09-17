@@ -21,7 +21,9 @@ async function start() {
   return broker;
 }
 
-describe.skipIf(process.platform === "win32")("spawn broker native transport", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   it("runs process commands outside the Gateway process", async () => {
     const host = await start();
     const argv0 = "openclaw-broker-command";

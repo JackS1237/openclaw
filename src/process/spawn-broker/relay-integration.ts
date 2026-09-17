@@ -3,8 +3,8 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
-import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { spawnProcess } from "../spawn-utils.js";
+import { createServiceChildCleanup } from "../supervisor/service-child-cleanup.js";
 import { BrokerChild } from "./child.js";
 
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
@@ -15,7 +15,7 @@ export function spawnServiceChildRelay(params: {
   onSpawnCleanup?: (completion: Promise<void>) => void;
 }): {
   child: ChildProcess;
-  extinctionCompletion: Deferred;
+  cleanup: ReturnType<typeof createServiceChildCleanup>;
   transportReady: Promise<void> | undefined;
 } {
   const workerUrl = resolveRuntimeWorkerUrl(params.entrypoint);
@@ -27,16 +27,15 @@ export function spawnServiceChildRelay(params: {
     windowsHide: true,
     env: process.env,
   });
-  const extinctionCompletion = createDeferredCore();
-  void extinctionCompletion.promise.catch(() => {});
-  params.onSpawnCleanup?.(extinctionCompletion.promise);
+  const cleanup = createServiceChildCleanup();
+  params.onSpawnCleanup?.(cleanup.promise);
   // Native pipes are ready synchronously; only the broker waits for transferred handles.
   const transportReady =
     child instanceof BrokerChild
       ? child.ready().catch((error: unknown) => {
-          extinctionCompletion.reject(error);
+          cleanup.completion.reject(error);
           throw error;
         })
       : undefined;
-  return { child, extinctionCompletion, transportReady };
+  return { child, cleanup, transportReady };
 }

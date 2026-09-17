@@ -343,8 +343,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const scheduledWrite = isScheduledMessageWriteAction(action)
         ? messageActionAuthorization.scheduled
         : undefined;
-      const scheduledReadAccountId =
-        scheduledRead?.policy.mode === "account" ? scheduledRead.policy.ownerAccountId : undefined;
+      const scheduledPolicy = (scheduledRead ?? scheduledWrite)?.policy;
+      const scheduledAccountId =
+        scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined;
       if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
         decisions.recordTurnCapabilityInactive();
         throw new Error("message action turn capability is no longer active");
@@ -352,8 +353,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const assertActionCurrent = () => {
         assertCaller();
         turnAuthority.assertCurrent();
-        scheduledRead?.assertCurrent();
-        scheduledWrite?.assertCurrent();
+        (scheduledRead ?? scheduledWrite)?.assertCurrent();
         assertDashboardReadCurrent?.();
       };
       assertActionCurrent();
@@ -438,7 +438,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         targets: params.targets,
         fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
         accountId: requestedAccountId,
-        fallbackAccountId: scheduledReadAccountId ?? agentAccountId,
+        fallbackAccountId: scheduledAccountId ?? agentAccountId,
       });
       // Broadcast execution only narrows on an explicit non-all channel. Target
       // prefixes cannot authorize fewer providers than the runner will execute.
@@ -450,7 +450,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         validateExplicitMessageAccountSelection({
           cfg: rawConfig,
           channel: unscopedExplicitBroadcast ? undefined : scope.channel,
-          accountId: requestedAccountId ?? scheduledReadAccountId,
+          accountId: requestedAccountId ?? scheduledAccountId,
           checkResolvedAccount: false,
         }),
       );
@@ -493,7 +493,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ).resolvedConfig;
       assertActionCurrent();
 
-      const accountId = explicitAccountId ?? scheduledReadAccountId ?? agentAccountId;
+      const accountId = explicitAccountId ?? scheduledAccountId ?? agentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
         action,
         args: params,

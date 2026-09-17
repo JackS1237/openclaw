@@ -512,7 +512,7 @@ describe("createSlackBoltApp", () => {
             ? Buffer.concat(data)
             : Buffer.isBuffer(data)
               ? data
-              : Buffer.from(data);
+              : Buffer.from(new Uint8Array(data));
           acknowledgements.push(JSON.parse(bytes.toString("utf8")).envelope_id);
         });
         socket.send(JSON.stringify({ type: "hello" }));

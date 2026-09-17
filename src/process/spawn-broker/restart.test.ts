@@ -10,7 +10,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker recovery budget", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker recovery budget", () => {
   it("recovers after more than five independently healthy generations", async () => {
     let onRecovered: ((pid: number) => void) | undefined;
     const host = createSpawnBrokerHost({ onReady: (pid) => onRecovered?.(pid) });

@@ -303,6 +303,7 @@ const rootEntries = [
   "src/plugins/build-smoke-entry.ts!",
   // Required metadata readers load this tsdown entry by computed source/dist path.
   "src/plugins/plugin-metadata-readers.runtime.ts!",
+  "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts!",
   // Released Gateways still import this stable entry after an on-disk update.
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.

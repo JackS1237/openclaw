@@ -921,7 +921,7 @@ extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/confidence-report.ts	2
-extensions/qa-lab/src/crabline-transport.ts	6
+extensions/qa-lab/src/crabline-transport.ts	5
 extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
@@ -1535,7 +1535,6 @@ src/acp/event-mapper.ts	1
 src/acp/permission-relay.ts	1
 src/acp/persistent-bindings.types.ts	3
 src/acp/runtime/registry.ts	2
-src/acp/runtime/session-meta.ts	2
 src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
@@ -1599,7 +1598,6 @@ src/agents/bash-tools.exec-host-node-phases.ts	3
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
-src/agents/bash-tools.exec-runtime.ts	2
 src/agents/bash-tools.exec-script-preflight.ts	2
 src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
@@ -1635,7 +1633,7 @@ src/agents/code-mode.ts	2
 src/agents/code-mode.worker.ts	7
 src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	7
-src/agents/command/attempt-execution.ts	3
+src/agents/command/attempt-execution.ts	1
 src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
@@ -2500,7 +2498,6 @@ src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
-src/config/sessions/session-accessor.sqlite-title-probes.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
@@ -2791,7 +2788,6 @@ src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-title-reader.ts	1
 src/gateway/session-utils-core.ts	1
-src/gateway/session-utils-search.ts	1
 src/gateway/session-utils.fs.ts	2
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
@@ -3101,7 +3097,7 @@ src/node-host/invoke-agent-cli-claude-params.ts	4
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-file-commands.ts	1
 src/node-host/invoke-payload.ts	5
-src/node-host/invoke.ts	7
+src/node-host/invoke.ts	4
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
@@ -3288,7 +3284,7 @@ src/plugins/registry-runtime.ts	5
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1
 src/plugins/runtime-state.ts	1
-src/plugins/runtime-workspace-state.ts	2
+src/plugins/runtime-workspace-state.ts	1
 src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
@@ -3399,7 +3395,6 @@ src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	12
 src/skills/lifecycle/install-download.ts	4
-src/skills/lifecycle/install.ts	1
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/config.ts	1

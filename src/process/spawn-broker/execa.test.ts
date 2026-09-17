@@ -10,7 +10,9 @@ import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("broker execa parity", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("broker execa parity", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
